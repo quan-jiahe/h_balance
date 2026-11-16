@@ -27,3 +27,11 @@ Thumbs.db
 __pycache__/
 *.py[cod]
 /.clangd
+
+# Keil local state and build output; keep the distributable test HEX.
+Objects/
+Listings/
+*.uvguix.*
+*.uvoptx
+*.build_log.htm
+!stm32f407_uart_test/Firmware/*.hex

@@ -3,7 +3,8 @@
 ## 工程现状
 
 - `k230/` 是亚博带触摸屏 K230 的 CanMV 程序，先阅读 `k230/README.md`。部署需要 Python 文件、字体和字体许可证。
-- 根目录 C 工程仍是 TI MSPM0 / CCS 工程，尚未移植到用户计划使用的 STM32F407VET6；不要将其称为可烧录的 F407 固件。
+- 根目录 C 工程仍是 TI MSPM0 / CCS 平衡工程，尚未移植平衡控制到 STM32F407VET6。
+- `stm32f407_uart_test/` 是独立的 F407 通讯测试 Keil 工程，含源码和已编译 HEX。USART3：PD9 RX 接 K230 IO9 TX，PD8 TX 接 K230 IO10 RX，两板共地，115200/8N1。已完成 Keil 编译与 C/K230 协议软件互通检查，尚未通过 ST-Link 烧录或双板实测。它不控制电机，四个触控按钮用于测试值、START/STOP 和清零；详见该目录 README。
 - 平台没有小车底盘。小车相关逻辑已移除，钢球速度补偿 KFF/KFF2 必须保留。
 - 模型训练、钢球识别与几何标定暂缓。当前没有训练模型，`detect_ball()` 返回 `None`，标定参数未填写，发送 LOST 观测；不能宣称已经实现闭环平衡。
 - 模式导航使用 K230 触控，经串口控制主控菜单。协议见 `k230/README.md` 与 `user_driver/mspm0_k230_comm.h`。

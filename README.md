@@ -3,6 +3,7 @@
 钢球平衡系统：亚博带触摸屏 K230 负责视觉接口和触控菜单，通过串口与主控通信。
 
 - K230 部署、串口协议和待完成项：[k230/README.md](k230/README.md)。
+- STM32F407VET6 完整 Keil 通讯测试工程和 HEX：[stm32f407_uart_test/README.md](stm32f407_uart_test/README.md)。
 - 两台电脑上的 Codex 接手前先阅读 [AGENTS.md](AGENTS.md)。
 - 当前 C 工程仍为 TI MSPM0 工程，STM32F407 移植、钢球识别与标定尚未完成。
 - 本机设备备份与编译缓存不进入 Git；K230 字体及许可证随代码提交。
