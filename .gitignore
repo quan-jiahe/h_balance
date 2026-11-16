@@ -1,0 +1,29 @@
+﻿# Build output directories
+Debug/
+Release/
+build/
+*.out
+*.map
+*.bin
+*.hex
+*.lst
+*.d
+*.obj
+*.o
+
+# CCS / Eclipse workspace metadata (local)
+*.launch
+
+# Editor
+.vscode/
+*.swp
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Device snapshots and generated local files
+/device_backups/
+__pycache__/
+*.py[cod]
+/.clangd
