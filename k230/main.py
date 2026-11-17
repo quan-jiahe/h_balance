@@ -1,4 +1,4 @@
-"""Yahboom K230 touch menu/camera/UART; detector and calibration pending."""
+"""Yahboom K230 steel-ball YOLO11, touch menu and UART; mm calibration pending."""
 
 import math
 import struct
@@ -139,15 +139,6 @@ class BallTracker:
         return x_mm, velocity, confidence, RAW_VALID
 
 
-def detect_ball(frame):
-    """Return (center_x_px, center_y_px, confidence_0_to_100), or None.
-
-    Background and model are not decided yet. Implement the detector here;
-    do not use an arbitrary circle/blob as a valid ball observation.
-    """
-    return None
-
-
 def write_frame(uart, packet):
     offset = 0
     while offset < len(packet):
@@ -166,8 +157,10 @@ def run():
     from media.display import Display
     from media.media import MediaManager
     from touch_ui import TouchMenu
+    from steel_ball_detector import SteelBallDetector
 
     sensor = None
+    detector = None
     uart = None
     display_ready = False
     media_ready = False
@@ -190,12 +183,13 @@ def run():
         sensor = Sensor()
         sensor.reset()
         sensor.set_framesize(width=WIDTH, height=HEIGHT)
-        sensor.set_pixformat(Sensor.RGB565)
+        sensor.set_pixformat(Sensor.RGBP888)
         Display.init(Display.ST7701, width=WIDTH, height=HEIGHT, osd_num=1, to_ide=True)
         display_ready = True
         MediaManager.init()
         media_ready = True
         sensor.run()
+        detector = SteelBallDetector(WIDTH, HEIGHT)
         ui = TouchMenu(lambda index: write_frame(
             uart, build_key_frame((KEY_UP, KEY_DOWN, KEY_OK, KEY_BACK)[index]),
         ))
@@ -203,7 +197,7 @@ def run():
         last_sync_ms = time.ticks_add(previous_ms, -1000)
         last_menu_ms = None
         print("K230 preview: UART1 IO9/IO10, 115200 8N1")
-        print("Detector/calibration pending: all transmitted observations are LOST")
+        print("Steel-ball Model2 loaded: pixel detection active; mm calibration pending")
 
         while True:
             os.exitpoint()
@@ -223,7 +217,7 @@ def run():
             elapsed_ms = time.ticks_diff(now_ms, previous_ms)
             previous_ms = now_ms
             uptime_ms = (uptime_ms + elapsed_ms) & 0xFFFFFFFF
-            detection = detect_ball(frame) if enabled else None
+            detection = detector.detect(frame) if enabled else None
             measurement = tracker.update(detection, elapsed_ms, X_ZERO_PX, MM_PER_PIXEL)
             write_frame(uart, build_frame(sequence, uptime_ms, measurement))
             sequence = (sequence + 1) & 0xFFFF
@@ -231,7 +225,9 @@ def run():
             if not enabled:
                 label = "STOPPED - LOST"
             elif X_ZERO_PX is None or MM_PER_PIXEL is None:
-                label = "CALIBRATION / DETECTOR PENDING"
+                label = ("YOLO X:%.0f Y:%.0f C:%d%%" % detection
+                         if detection is not None else "YOLO: NO BALL")
+                label += "\nCALIBRATION PENDING"
             elif measurement[3] == LOST:
                 label = "NO VALID BALL - LOST"
             else:
@@ -256,6 +252,7 @@ def run():
             except Exception as exc:
                 print("Touch UI cleanup failed:", exc)
         for resource, method in (
+            (detector, "deinit"),
             (sensor, "stop"), (Display if display_ready else None, "deinit"),
             (MediaManager if media_ready else None, "deinit"), (uart, "deinit"),
         ):

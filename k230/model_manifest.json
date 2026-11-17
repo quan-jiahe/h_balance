@@ -1,0 +1,11 @@
+{
+  "filename": "steel_ball_model2_nncase2.9.kmodel",
+  "source": "https://github.com/pineapple-miriam/Yahboom-K230-SteelBall-Vision",
+  "commit": "73c4de7ba88d1ae7b704f1ef259247091d8ec5c2",
+  "url": "https://raw.githubusercontent.com/pineapple-miriam/Yahboom-K230-SteelBall-Vision/73c4de7ba88d1ae7b704f1ef259247091d8ec5c2/models/model2/steel_ball_model2_nncase2.9.kmodel",
+  "size": 3019992,
+  "sha256": "b33610c4b4994b30f75d8f519bb416f33182c57340a7872cfe5509e7b0222092",
+  "input_size": [320, 320],
+  "labels": ["steel"],
+  "device_path": "/sdcard/kmodel/steel_ball_model2_nncase2.9.kmodel"
+}
