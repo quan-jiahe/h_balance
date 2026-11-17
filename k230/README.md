@@ -1,19 +1,21 @@
 # 亚博触摸屏 K230：触控菜单、相机与串口
 
-当前程序提供**LVGL 触控菜单、相机采集和串口联调**。LCD 使用完整的不透明菜单，不再叠加相机背景；相机采集和后续识别接口保留。背景、平台尺寸和模型训练按当前决定暂缓，因此没有附带训练模型，也没有实现钢球识别。`detect_ball()` 明确返回 `None`，标定参数默认为 `None`，观测帧默认只发送 `LOST`，不发送伪造的有效坐标。
+当前程序提供**YOLO11 钢球识别、LVGL 触控菜单和串口联调**，接入指定上游仓库的 Model2。LCD 保留完整的不透明菜单，不叠加相机背景。屏幕显示识别到的像素坐标和置信度；像素到毫米的标定参数仍为 `None`，串口只发送 `LOST`，待实测标定后再启用有效毫米观测。模型来源、所需运行库和下载方法见 [MODEL.md](MODEL.md)。
 
 ## 文件与部署
 
 - `main.py`：相机、协议、触控事件发送、菜单接收和速度估计。
 - `touch_ui.py`：LVGL 界面和 `TOUCH(0)` 输入。与 `main.py` 一起部署。
+- `steel_ball_detector.py`：调用板上原生 YOLO11，解码 steel 检测结果。
+- `kmodel/steel_ball_model2_nncase2.9.kmodel`：钢球模型，先在电脑运行 `py tools/download_steel_ball_model.py` 下载，再上传到 `/sdcard/kmodel/`。
 - `balance_ui_28.fnt`：28 像素界面专用中英文字库，必须上传到 `/sdcard/balance_ui_28.fnt`。
 - `FONT_LICENSE.txt`：字库所用思源黑体的 SIL Open Font License 授权文本。
-- `test_main.py`、`test_controller.py`：PC 测试，不需要复制到 K230。
+- `model_manifest.json`、`MODEL.md`：模型来源与校验信息；PC 测试在 `tools/test_*.py`，不用上传到板上。
 
 1. 使用亚博适配的 CanMV K230 固件和 CanMV IDE；这不是 STM32 的 `.hex` 固件。
 2. 先将 K230 内存卡 `/sdcard/main.py` **复制到电脑备份**。保存新 `main.py` 会替换原来的开机程序，可能是亚博自带 GUI。不要删除卡上的其他目录、库或模型。
-3. 在 CanMV IDE 连接设备，停止原程序，先把 `touch_ui.py`、`balance_ui_28.fnt` 和 `FONT_LICENSE.txt` 上传到 `/sdcard/`，再打开本目录的 `main.py` 点击运行。
-4. 正常时，屏幕完整显示四行主控菜单和底部四个触控按钮。没有配套主控连接时显示“未收到主控回包”，有连接后显示主控实际返回的菜单。识别和标定未完成时，另有“待接入识别与标定”提示。
+3. 在 CanMV IDE 连接设备，停止原程序，先把 `touch_ui.py`、`steel_ball_detector.py`、`balance_ui_28.fnt` 和 `FONT_LICENSE.txt` 上传到 `/sdcard/`，将模型上传到 `/sdcard/kmodel/`，保留原生 `libs` 目录，再打开本目录的 `main.py` 点击运行。
+4. 正常时，屏幕完整显示四行主控菜单和底部四个触控按钮。没有配套主控连接时显示“未收到主控回包”，有连接后显示主控实际返回的菜单。检测区显示像素坐标、置信度或 `YOLO: NO BALL`，未填写毫米标定时显示 `CALIBRATION PENDING`。
 5. 确认相机和屏幕正常后，使用 IDE 的“保存当前脚本到 CanMV 板（作为 main.py）”，重启验证离线运行。
 6. 恢复原 GUI 时，把备份的 `/sdcard/main.py` 放回原处并重启。
 
@@ -21,7 +23,7 @@
 
 ## 触控替代实体按键
 
-本次只读取了设备上的原生文件作参考，没有改写设备文件：
+触控界面参考了设备上的以下原生文件；这些原生文件保持原样：
 
 - `/sdcard/ybMain/main.py`：640×480、LVGL BGRA8888 缓冲、显示刷新和 `TOUCH(0)` 回调。
 - `/sdcard/02.lvgl_button.py`：`lv.btn`、`lv.EVENT.CLICKED` 的按钮事件。
@@ -85,11 +87,11 @@ K230 发给主控的触控事件采用同样的 7 字节封装：`40`=上、`41`
 
 目标循环周期 20 ms，**实际帧率由相机、处理与显示耗时决定**，不能保证 50 fps。速度按实际采样间隔计算，并进行一阶低通。现有主控收到 `LOST` 后会忽略该帧，连续约 500 ms 没有有效观测才停止电机，并非立即停机；这是原控制代码的行为，本次没有修改。
 
-## 后续接入钢球识别与标定
+## 识别检查与毫米标定
 
-等背景、尺寸和模型确定后，再完成以下两部分：
+模型已接入，正式用于控制前还需完成以下两步：
 
-1. 实现 `detect_ball(frame)`：输入是干净的 640×480 RGB565 图像，返回 `(球心x像素, 球心y像素, 置信度0到100)`，没有球返回 `None`。模型类别、输入尺寸、预处理、输出解码均待模型确定后实现，不能只填一个 `.kmodel` 文件路径。
+1. `SteelBallDetector.detect(frame)` 已接入 Model2：输入为 640×480 RGBP888，返回 `(球心x像素, 球心y像素, 置信度0到100)`，没有球返回 `None`。先验证本平台的识别效果，并将 `steel_ball_detector.py` 的 ROI 限制在实际平台内。
 2. 填写 `X_ZERO_PX` 和 `MM_PER_PIXEL`，使 `x_mm = (x_px - X_ZERO_PX) * MM_PER_PIXEL`。例如实测两点在图像上的距离为 Δpx、平台上的实际距离为 Δmm，则比例的绝对值为 Δmm/Δpx，符号按主控的正方向确定。示例公式不是默认标定值。
 
 首次检测/丢球后重新检测时，速度从 0 开始估计；低置信度、越界、非有限数、过期的连续采样或超出协议数值范围都会发送 `LOST`。
@@ -101,13 +103,11 @@ K230 发给主控的触控事件采用同样的 7 字节封装：`40`=上、`41`
 在工程根目录运行：
 
 ```powershell
-py -B -m unittest discover -s k230 -p "test_*.py" -v
+py -B -m unittest discover -s tools -p "test_*.py" -v
 ```
 
 如果使用的不是 Windows Python 启动器，可将 `py` 换成 `python3` 或实际的 Python 命令。
 
-Python 测试覆盖观测/触控帧、菜单快照、碎片化接收、CRC、速度估计和无效数据处理。
+当前 Python 测试覆盖本板 YOLO11 检测结果格式、ROI/置信度筛选、无效检测和未标定时发送 LOST，以及 LVGL 缓冲与触控事件绑定。F407 的 C/串口协议互通测试见 `stm32f407_uart_test/Tests/`。
 
-`test_controller.py` 还会编译实际的 C 串口解析、UART ISR、菜单和 PID 控制源文件，用硬件替身验证触控切换平衡/自动序列、停止归零、目标设置、调参入口、数据显示和速度补偿。它需要在 MSVC 开发者命令提示符中运行；找不到 `cl` 时只跳过该项。如果环境里还有 `arm-none-eabi-gcc`，同一份代码也会做 C99 语法检查。
-
-硬件相机、LCD、实际触摸坐标、固件版本及真实串口时序仍需上板验证。
+板上模型加载、相机推理与显示应分别验证；没有实际钢球的相机空场推理不能证明本平台的检测精度，也不能替代毫米标定与双板闭环测试。

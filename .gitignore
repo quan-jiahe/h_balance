@@ -35,3 +35,6 @@ Listings/
 *.uvoptx
 *.build_log.htm
 !stm32f407_uart_test/Firmware/*.hex
+
+# Download the upstream model with tools/download_steel_ball_model.py.
+/k230/kmodel/*.kmodel

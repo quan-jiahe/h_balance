@@ -1,0 +1,38 @@
+# 钢球 Model2 部署说明
+
+模型来自 [pineapple-miriam/Yahboom-K230-SteelBall-Vision](https://github.com/pineapple-miriam/Yahboom-K230-SteelBall-Vision)，选择其 Model2、nncase 2.9 版本。来源提交、文件大小和 SHA256 固定在 `model_manifest.json`；模型不重复提交到本仓库。在电脑上运行以下命令即可取得同一文件：
+
+```powershell
+py tools/download_steel_ball_model.py
+```
+
+模型会保存到本机 `k230/kmodel/steel_ball_model2_nncase2.9.kmodel`。将该文件复制到板上相同的 `/sdcard/kmodel/` 目录。现有亚博固件 `CanMV v1.8-9-g17e341e` 已实测能够加载该模型并执行相机推理，无需重新刷整张系统镜像。
+
+## 不能只放一个模型文件
+
+- `.kmodel` 是 K230 推理权重；`.pt`、数据集和训练用 YOLO 工程不用复制到板上。
+- 保留板上的 `/sdcard/libs/YOLO.py`、`AIBase.py`、`AI2D.py`、`Utils.py`、`PipeLine.py` 等原生运行库。旧文件夹是否能删取决于它是否被程序导入，不能按文件夹名直接删除。
+- 本工程继续使用自己的 `main.py`、`touch_ui.py`、字体与串口协议，新增 `steel_ball_detector.py` 负责模型调用。不用上游 `yolo/main.py` 替换当前开机程序。
+
+## 本机适配与上游示例的差别
+
+板上 `libs.YOLO.YOLO11` 返回 `[xywh检测框, 类别编号, 置信度]` 三个数组。本工程按该真实格式解码，模型输入为 RGBP888、320×320，类别为 `steel`，检测坐标映射回 640×480。
+
+上游示例里的串口协议是文本 `1,<mm>`，不兼容现有 F407 工程的二进制 CRC 协议。本工程只接入模型推理，保留原有 18 字节观测、7 字节触控/命令和 95 字节菜单协议，以及按实际采样时间计算速度的逻辑。
+
+上游 `ROI`、零点和毫米标定属于作者自己的安装环境，不能直接用于本平台。当前 ROI 为全画面，置信度阈值 0.50，接受 ROI 内置信度最高的 steel；正式控制前需在 `steel_ball_detector.py` 中限制实际平台 ROI。
+
+## 识别与标定是两步
+
+当前屏幕可显示 `YOLO X:... Y:... C:...%`（像素坐标与置信度）或 `YOLO: NO BALL`。`CALIBRATION PENDING` 表示像素到毫米的几何标定尚未填写。
+
+`main.py` 的 `X_ZERO_PX` 和 `MM_PER_PIXEL` 仍为 `None`，因此即使检测到球，发给主控的观测仍为 `LOST`。测量实际零点和像素比例后再填写，不能把像素坐标作为毫米发送。当前仍是 X 单轴协议，Y 像素仅用于识别检查。
+
+作者未对整个上游仓库声明统一 MIT/Apache 授权；其第三方与模型来源说明见上游 README。这里保留来源引用，不为模型另行声明许可证。
+
+## 本次验证
+
+- 模型在实际 K230 上 SHA256 与清单一致，KPU 加载成功，输入/输出各一个。
+- 相机 RGBP888 推理、原有触控菜单与二进制串口程序一起连续运行 180 帧，VO/WBC 实际合成输出中菜单和四个按钮完整显示。
+- 7 项 PC 检查通过，覆盖原生输出格式、ROI/阈值筛选、未标定保持 LOST、模型下载校验、LVGL 缓冲与按键绑定。
+- 当前相机画面未检出钢球，主控菜单回包计数为 0；尚未验证本平台实物钢球的检测精度、毫米标定及双板闭环。

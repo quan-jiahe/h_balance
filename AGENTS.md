@@ -6,7 +6,9 @@
 - 根目录 C 工程仍是 TI MSPM0 / CCS 平衡工程，尚未移植平衡控制到 STM32F407VET6。
 - `stm32f407_uart_test/` 是独立的 F407 通讯测试 Keil 工程，含源码和已编译 HEX。USART3：PD9 RX 接 K230 IO9 TX，PD8 TX 接 K230 IO10 RX，两板共地，115200/8N1。已完成 Keil 编译与 C/K230 协议软件互通检查，尚未通过 ST-Link 烧录或双板实测。它不控制电机，四个触控按钮用于测试值、START/STOP 和清零；详见该目录 README。
 - 平台没有小车底盘。小车相关逻辑已移除，钢球速度补偿 KFF/KFF2 必须保留。
-- 模型训练、钢球识别与几何标定暂缓。当前没有训练模型，`detect_ball()` 返回 `None`，标定参数未填写，发送 LOST 观测；不能宣称已经实现闭环平衡。
+- 已选择外部钢球 Model2（nncase 2.9，来源与校验见 `k230/model_manifest.json`），通过板上原生 `libs.YOLO.YOLO11` 接入；适配其 `[xywh_boxes, class_ids, scores]` 返回格式。模型用 `tools/download_steel_ball_model.py` 下载，不重复提交权重。保留原生 `libs`，不要用上游完整 main.py 覆盖本工程的触控/二进制串口程序。
+- 毫米标定仍未填写，因此即使检测到球也发送 LOST；屏幕只显示像素坐标和置信度供验证，不能宣称已经实现闭环平衡。
+- 已在实际 K230 加载 Model2，并将相机推理、现有触控和串口程序一起运行 180 帧，实际 VO 显示正常。当前画面未检出钢球且未收到主控菜单回包，实物精度、毫米标定和双板闭环仍待验证。PC 的模型适配/下载与显示共 7 项检查通过。
 - 模式导航使用 K230 触控，经串口控制主控菜单。协议见 `k230/README.md` 与 `user_driver/mspm0_k230_comm.h`。
 - LCD 使用单个 OSD0、不透明全屏 BGRA 菜单。已通过板端 VO/WBC 输出确认底部按钮完整显示；仅检查 LVGL 内存缓冲不足以验证显示。手指触控、STM32 联动和长时间运行尚未验证。
 
