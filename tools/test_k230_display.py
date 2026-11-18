@@ -67,6 +67,7 @@ class DisplayTests(unittest.TestCase):
         with patch.dict(sys.modules, modules):
             spec.loader.exec_module(module)
         self.sent = []
+        self.module = module
         self.ui = module.TouchMenu(self.sent.append)
 
     def test_draw_format_buffers_and_actual_flushed_pointer(self):
@@ -107,6 +108,7 @@ class DisplayTests(unittest.TestCase):
         frame.bytearray.return_value = bytes([0x12]) * (448 * 336 * 2)
         self.ui.update(["a", "b", "c", "d"], "YOLO: NO BALL\nCALIBRATION PENDING", True,
                        frame, (100, 200, 40, 20))
+        frame.draw_line.assert_called_once_with(0, 168, 447, 168, color=(255, 0, 0), thickness=2)
         frame.draw_rectangle.assert_called_once_with(70, 140, 28, 14, color=(0, 255, 0), thickness=2)
         frame.draw_cross.assert_called_once_with(84, 147, color=(255, 255, 0), size=8)
         self.assertEqual(self.ui.preview_data, frame.bytearray.return_value)
@@ -115,12 +117,24 @@ class DisplayTests(unittest.TestCase):
         self.ui.preview.invalidate.assert_called_once_with()
         frame.reset_mock()
         self.ui.update(["a", "b", "c", "d"], "YOLO: NO BALL", False, frame, None)
+        frame.draw_line.assert_called_once_with(0, 168, 447, 168, color=(255, 0, 0), thickness=2)
         frame.draw_rectangle.assert_not_called()
         frame.draw_cross.assert_not_called()
         self.assertEqual(self.ui.preview.invalidate.call_count, 2)
         frame.bytearray.return_value = b"bad size"
         with self.assertRaises(ValueError):
             self.ui.update(["a", "b", "c", "d"], "", False, frame, None)
+
+    def test_alignment_line_position_and_bounds(self):
+        frame = Mock()
+        frame.bytearray.return_value = bytes(448 * 336 * 2)
+        with patch.object(self.module, "ALIGN_LINE_Y", 100):
+            self.ui.update(["", "", "", ""], "STOPPED - LOST", False, frame, None)
+        frame.draw_line.assert_called_once_with(0, 100, 447, 100, color=(255, 0, 0), thickness=2)
+        for y in (-1, 336, 1.5):
+            with self.subTest(y=y), patch.object(self.module, "ALIGN_LINE_Y", y):
+                with self.assertRaises(ValueError):
+                    self.module.TouchMenu(self.sent.append)
 
 
 if __name__ == "__main__":

@@ -8,10 +8,13 @@ from media.display import Display
 
 PREVIEW_WIDTH = 448
 PREVIEW_HEIGHT = 336
+ALIGN_LINE_Y = PREVIEW_HEIGHT // 2  # 168; preview Y=0..335, increases downward.
 
 
 class TouchMenu:
     def __init__(self, send_key):
+        if not isinstance(ALIGN_LINE_Y, int) or not 0 <= ALIGN_LINE_Y < PREVIEW_HEIGHT:
+            raise ValueError("ALIGN_LINE_Y must be an integer from 0 to 335")
         self.menu_revision = 0
         self.last_lines = None
         self.last_status = None
@@ -120,6 +123,8 @@ class TouchMenu:
         data.state = state
 
     def update(self, lines, observation_status, connected, frame, box):
+        frame.draw_line(0, ALIGN_LINE_Y, PREVIEW_WIDTH - 1, ALIGN_LINE_Y,
+                        color=(255, 0, 0), thickness=2)
         if box is not None:
             x, y, width, height = box
             x1 = max(0, min(PREVIEW_WIDTH - 1, round(x * PREVIEW_WIDTH / 640)))
