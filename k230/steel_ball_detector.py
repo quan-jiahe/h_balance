@@ -34,7 +34,7 @@ def select_ball(result, width=640, height=480, roi=ROI):
             continue
         if score > best_score:
             best_score = score
-            best = (cx, cy, int(round(score * 100)))
+            best = (cx, cy, int(round(score * 100)), x, y, w, h)
     return best
 
 
@@ -42,6 +42,7 @@ class SteelBallDetector:
     def __init__(self, width=640, height=480):
         from libs.YOLO import YOLO11
         self.width, self.height = width, height
+        self.last_box = None
         self.model = YOLO11(
             task_type="detect", mode="video", kmodel_path=MODEL_PATH,
             labels=["steel"], rgb888p_size=[width, height],
@@ -52,7 +53,9 @@ class SteelBallDetector:
         self.model.config_preprocess()
 
     def detect(self, frame):
-        return select_ball(self.model.run(frame.to_numpy_ref()), self.width, self.height)
+        selected = select_ball(self.model.run(frame.to_numpy_ref()), self.width, self.height)
+        self.last_box = selected[3:] if selected is not None else None
+        return selected[:3] if selected is not None else None
 
     def deinit(self):
         self.model.deinit()

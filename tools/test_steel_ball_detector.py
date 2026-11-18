@@ -30,8 +30,8 @@ class SteelDetectionTests(unittest.TestCase):
     def test_native_xywh_order_and_strongest_steel(self):
         result = [[[10, 20, 20, 10], [100, 200, 40, 20], [0, 0, 30, 30]],
                   [0, 0, 1], [0.6, 0.9, 0.99]]
-        self.assertEqual(detector.select_ball(result), (120, 210, 90))
-        self.assertEqual(detector.select_ball(result, roi=(0, 0, 50, 50)), (20, 25, 60))
+        self.assertEqual(detector.select_ball(result), (120, 210, 90, 100, 200, 40, 20))
+        self.assertEqual(detector.select_ball(result, roi=(0, 0, 50, 50)), (20, 25, 60, 10, 20, 20, 10))
 
     def test_rejects_empty_wrong_layout_invalid_and_outside(self):
         for result in (None, [], [[], [], []], [[[0, 0, 2, 2, 0.9, 0]]],
@@ -45,7 +45,7 @@ class SteelDetectionTests(unittest.TestCase):
                 self.assertIsNone(detector.select_ball([[box], [0], [score]]))
 
     def test_real_detection_stays_lost_until_mm_calibration(self):
-        observation = detector.select_ball([[[100, 200, 40, 20]], [0], [0.9]])
+        observation = detector.select_ball([[[100, 200, 40, 20]], [0], [0.9]])[:3]
         tracker = protocol.BallTracker()
         self.assertEqual(tracker.update(observation, 40, None, None), protocol.LOST_MEASUREMENT)
         self.assertEqual(tracker.update(observation, 40, 100, 0.5), (10, 0, 90, protocol.RAW_VALID))
@@ -63,7 +63,11 @@ class SteelDetectionTests(unittest.TestCase):
         model.config_preprocess.assert_called_once_with()
         frame = Mock()
         self.assertEqual(instance.detect(frame), (120, 210, 90))
+        self.assertEqual(instance.last_box, (100, 200, 40, 20))
         model.run.assert_called_once_with(frame.to_numpy_ref.return_value)
+        model.run.return_value = [[], [], []]
+        self.assertIsNone(instance.detect(frame))
+        self.assertIsNone(instance.last_box)
         instance.deinit()
         model.deinit.assert_called_once_with()
 

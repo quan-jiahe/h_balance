@@ -154,10 +154,10 @@ def run():
     import gc
     import os
     from machine import FPIOA, UART
-    from media.sensor import Sensor
+    from media.sensor import Sensor, CAM_CHN_ID_0, CAM_CHN_ID_2
     from media.display import Display
     from media.media import MediaManager
-    from touch_ui import TouchMenu
+    from touch_ui import TouchMenu, PREVIEW_WIDTH, PREVIEW_HEIGHT
     from steel_ball_detector import SteelBallDetector
 
     sensor = None
@@ -183,8 +183,10 @@ def run():
         )
         sensor = Sensor()
         sensor.reset()
-        sensor.set_framesize(width=WIDTH, height=HEIGHT)
-        sensor.set_pixformat(Sensor.RGBP888)
+        sensor.set_framesize(width=PREVIEW_WIDTH, height=PREVIEW_HEIGHT, chn=CAM_CHN_ID_0)
+        sensor.set_pixformat(Sensor.RGB565, chn=CAM_CHN_ID_0)
+        sensor.set_framesize(width=WIDTH, height=HEIGHT, chn=CAM_CHN_ID_2)
+        sensor.set_pixformat(Sensor.RGBP888, chn=CAM_CHN_ID_2)
         Display.init(Display.ST7701, width=WIDTH, height=HEIGHT, osd_num=1, to_ide=True)
         display_ready = True
         MediaManager.init()
@@ -203,7 +205,7 @@ def run():
         while True:
             os.exitpoint()
             loop_start = time.ticks_ms()
-            command = commands.feed(uart.read(64) or b"")
+            command = commands.feed((uart.read(64) or b"") if uart.any() else b"")
             if ui.menu_revision != commands.menu_revision:
                 last_menu_ms = loop_start
                 ui.menu_revision = commands.menu_revision
@@ -213,7 +215,7 @@ def run():
             if time.ticks_diff(loop_start, last_sync_ms) >= 1000:
                 write_frame(uart, build_key_frame(MENU_SYNC))
                 last_sync_ms = loop_start
-            frame = sensor.snapshot()
+            frame = sensor.snapshot(chn=CAM_CHN_ID_2)
             now_ms = time.ticks_ms()
             elapsed_ms = time.ticks_diff(now_ms, previous_ms)
             previous_ms = now_ms
@@ -234,7 +236,9 @@ def run():
             else:
                 label = "X:%+.1f mm V:%+.1f mm/s" % measurement[:2]
             connected = last_menu_ms is not None and time.ticks_diff(loop_start, last_menu_ms) < 3000
-            ui.update(commands.menu_lines, label, connected)
+            preview = sensor.snapshot(chn=CAM_CHN_ID_0)
+            ui.update(commands.menu_lines, label, connected, preview,
+                      detector.last_box if enabled else None)
             gc.collect()
             remaining_ms = FRAME_PERIOD_MS - time.ticks_diff(time.ticks_ms(), loop_start)
             if remaining_ms > 0:
@@ -265,4 +269,13 @@ def run():
 
 
 if __name__ == "__main__":
-    run()
+    try:
+        run()
+    except Exception as error:
+        import sys
+        try:
+            with open("/sdcard/balance_error.log", "w") as log:
+                sys.print_exception(error, log)
+        except OSError:
+            pass
+        raise

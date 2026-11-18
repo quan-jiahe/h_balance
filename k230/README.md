@@ -1,6 +1,6 @@
 # 亚博触摸屏 K230：触控菜单、相机与串口
 
-当前程序提供**YOLO11 钢球识别、LVGL 触控菜单和串口联调**，接入指定上游仓库的 Model2。LCD 保留完整的不透明菜单，不叠加相机背景。屏幕显示识别到的像素坐标和置信度；像素到毫米的标定参数仍为 `None`，串口只发送 `LOST`，待实测标定后再启用有效毫米观测。模型来源、所需运行库和下载方法见 [MODEL.md](MODEL.md)。
+当前程序提供**YOLO11 钢球识别、实时画面预览、LVGL 触控和串口联调**，接入指定上游仓库的 Model2。屏幕左侧显示 448×336 实时画面，识别到钢球时画绿色框和黄色中心；顶部显示状态，右侧显示主控信息与按键说明，底部保留四个按钮。像素到毫米的标定参数仍为 `None`，串口只发送 `LOST`，待实测标定后再启用有效毫米观测。模型来源、所需运行库和下载方法见 [MODEL.md](MODEL.md)。
 
 ## 文件与部署
 
@@ -8,14 +8,14 @@
 - `touch_ui.py`：LVGL 界面和 `TOUCH(0)` 输入。与 `main.py` 一起部署。
 - `steel_ball_detector.py`：调用板上原生 YOLO11，解码 steel 检测结果。
 - `kmodel/steel_ball_model2_nncase2.9.kmodel`：钢球模型，先在电脑运行 `py tools/download_steel_ball_model.py` 下载，再上传到 `/sdcard/kmodel/`。
-- `balance_ui_28.fnt`：28 像素界面专用中英文字库，必须上传到 `/sdcard/balance_ui_28.fnt`。
+- `balance_ui_20.fnt`：预览界面使用的 20 像素中英文字库，必须上传到 `/sdcard/balance_ui_20.fnt`。旧的 28 像素字库可保留供旧版恢复。
 - `FONT_LICENSE.txt`：字库所用思源黑体的 SIL Open Font License 授权文本。
 - `model_manifest.json`、`MODEL.md`：模型来源与校验信息；PC 测试在 `tools/test_*.py`，不用上传到板上。
 
 1. 使用亚博适配的 CanMV K230 固件和 CanMV IDE；这不是 STM32 的 `.hex` 固件。
 2. 先将 K230 内存卡 `/sdcard/main.py` **复制到电脑备份**。保存新 `main.py` 会替换原来的开机程序，可能是亚博自带 GUI。不要删除卡上的其他目录、库或模型。
-3. 在 CanMV IDE 连接设备，停止原程序，先把 `touch_ui.py`、`steel_ball_detector.py`、`balance_ui_28.fnt` 和 `FONT_LICENSE.txt` 上传到 `/sdcard/`，将模型上传到 `/sdcard/kmodel/`，保留原生 `libs` 目录，再打开本目录的 `main.py` 点击运行。
-4. 正常时，屏幕完整显示四行主控菜单和底部四个触控按钮。没有配套主控连接时显示“未收到主控回包”，有连接后显示主控实际返回的菜单。检测区显示像素坐标、置信度或 `YOLO: NO BALL`，未填写毫米标定时显示 `CALIBRATION PENDING`。
+3. 在 CanMV IDE 连接设备，停止原程序，先把 `touch_ui.py`、`steel_ball_detector.py`、`balance_ui_20.fnt` 和 `FONT_LICENSE.txt` 上传到 `/sdcard/`，将模型上传到 `/sdcard/kmodel/`，保留原生 `libs` 目录，再打开本目录的 `main.py` 点击运行。
+4. 正常时，左侧持续显示摄像头画面，无球或暂停识别时也会刷新。有球时叠加绿色框与黄色中心，顶部显示像素坐标、置信度或 `YOLO: NO BALL`；未标定时显示 `CALIBRATION PENDING`。没有配套主控连接时显示“未收到主控回包”，有连接后右侧显示主控返回的四行文字。
 5. 确认相机和屏幕正常后，使用 IDE 的“保存当前脚本到 CanMV 板（作为 main.py）”，重启验证离线运行。
 6. 恢复原 GUI 时，把备份的 `/sdcard/main.py` 放回原处并重启。
 
@@ -29,9 +29,40 @@
 - `/sdcard/02.lvgl_button.py`：`lv.btn`、`lv.EVENT.CLICKED` 的按钮事件。
 - `/sdcard/ybUtils/YbUart.py`：IO9/IO10 的 UART1 映射。
 
-本程序独立运行，采用相同的 LVGL/触摸 API，暂未注册成原生桌面的应用，也不需要修改 `ybMain`、`ybUtils`。字库由设备原有的 `/sdcard/res/font/SourceHanSansSC-Normal-Min.ttf` 生成，使用 28 像素、4 位抗锯齿，包含 ASCII 和当前界面所用中文。修改中文提示时，需要同步补充字库字符。
+本程序独立运行，采用相同的 LVGL/触摸 API，暂未注册成原生桌面的应用，也不需要修改 `ybMain`、`ybUtils`。预览版字库由设备原有的 `/sdcard/res/font/SourceHanSansSC-Normal-Min.ttf` 生成，使用 20 像素、4 位抗锯齿，包含 ASCII 和当前界面所用中文。修改中文提示时，需要同步补充字库字符。
 
-显示驱动显式设为 `lv.COLOR_FORMAT.ARGB8888`，与两个 `image.BGRA8888` 图像缓冲匹配，保留对应 bytearray 引用；刷新时按 LVGL 提供的地址选择实际缓冲。LCD 只使用 `LAYER_OSD0` 一个图层，整个根界面不透明，避免相机和 UI 多层叠加造成下半屏覆盖。相机帧仍供识别接口使用，不写入 LCD。显示验证应使用 VO/WBC 合成输出，而不只检查 LVGL 内存缓冲。
+显示驱动显式设为 `lv.COLOR_FORMAT.ARGB8888`，与两个 `image.BGRA8888` 图像缓冲匹配，保留对应 bytearray 引用；刷新时按 LVGL 提供的地址选择实际缓冲。LCD 仍只使用 `LAYER_OSD0` 一个图层：448×336 RGB565 预览作为 LVGL 图像，与文字和按钮一起合成。预览像素复制到持久缓冲，避免相机复用帧缓冲时撕裂；不把相机和 UI 分别写到两个显示图层。AI 使用通道 2 的 640×480 RGBP888，预览使用通道 0 的 RGB565。显示验证应使用 VO/WBC 合成输出，而不只检查 LVGL 内存缓冲。
+
+### 当前 F407 通讯测试固件的按键
+
+| 屏幕按钮 | 当前实际作用 |
+| --- | --- |
+| 上移 +1 | F407 的通讯测试值 V 加一，不是让小球或平台上移 |
+| 下移 -1 | 测试值 V 减一 |
+| 确认/启停 | F407 回传 START/STOP，切换 K230 钢球识别；预览始终继续 |
+| 返回/清零 | 测试值 V 清零，不是回零电机 |
+
+四个按钮发送的事件编号不变。以下正式菜单说明适用于根目录 MSPM0 平衡固件，不能将其理解为当前 F407 通讯测试已经具备这些电机控制功能。
+
+### 屏幕文字和数字
+
+| 屏幕信息 | 含义 |
+| --- | --- |
+| 主控菜单已同步 | K230 收到了 STM32 的菜单回包，只证明 STM32→K230 方向有有效数据 |
+| YOLO: NO BALL | 当前没有达到筛选条件的钢球检测结果，不代表模型没有加载 |
+| YOLO X/Y/C | 钢球中心 X/Y 为原始 640×480 图像的像素坐标，C 为置信度百分比；左侧预览已缩小为 448×336 |
+| CALIBRATION PENDING | 尚未填写像素到毫米的标定，观测仍发送 LOST |
+| F407 RX:OK/WAIT/LOST | STM32 最近 1.5 秒收到有效 K230 帧 / 从未收到 / 接收超时 |
+| N | STM32 累计收到的有效观测、按键和菜单同步请求总数，显示值取模 100000 |
+| OBS | STM32 累计收到的小球观测帧数，包含 LOST 帧，显示值取模 100000 |
+| OBS 后的 LOST/VALID | 最近一帧观测的状态；未标定或没检测到球时 LOST 正常 |
+| KEY | STM32 最近收到的真实按键事件；菜单同步请求不会覆盖它 |
+| V | 按键通讯测试值，上移加一、下移减一、返回清零，不是速度或小球坐标 |
+| RUN:ON/OFF | STM32 请求的视觉识别启停状态，OFF 时预览和通讯仍继续 |
+| E | STM32 的 UART 硬件错误与接收缓冲溢出累计计数，显示值取模 1000 |
+| C | STM32 的 CRC 校验失败累计计数，显示值取模 1000；与顶部 YOLO 置信度 C 不同 |
+
+正常双向通讯应同时看到顶部同步、`RX:OK`，且 N/OBS 持续增加。E/C 的非零值表示发生过错误，判断当前是否异常要看计数是否持续增长。调试暂停或刚启动时 RX 可能短暂为 LOST；若持续如此，应排查 K230→STM32 方向。
 
 | 屏幕按钮 | 操作 |
 | --- | --- |
@@ -115,5 +146,7 @@ py -B -m unittest discover -s tools -p "test_*.py" -v
 如果使用的不是 Windows Python 启动器，可将 `py` 换成 `python3` 或实际的 Python 命令。
 
 当前 Python 测试覆盖本板 YOLO11 检测结果格式、ROI/置信度筛选、无效检测和未标定时发送 LOST，以及 LVGL 缓冲与触控事件绑定。F407 的 C/串口协议互通测试见 `stm32f407_uart_test/Tests/`。
+
+预览相关检查还覆盖 RGB565 图像缓冲、检测框缩放与无球时继续刷新。启动异常会保存到板上 `/sdcard/balance_error.log`，用于固件 API 或资源初始化问题的定位。
 
 板上模型加载、相机推理与显示应分别验证；没有实际钢球的相机空场推理不能证明本平台的检测精度，也不能替代毫米标定与双板闭环测试。

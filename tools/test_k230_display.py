@@ -38,7 +38,7 @@ class DisplayTests(unittest.TestCase):
 
         self.lv = SimpleNamespace(
             init=Mock(), deinit=Mock(), disp_create=Mock(return_value=self.driver),
-            COLOR_FORMAT=SimpleNamespace(ARGB8888=17),
+            COLOR_FORMAT=SimpleNamespace(ARGB8888=17, RGB565=9),
             DISP_RENDER_MODE=SimpleNamespace(FULL=1),
             INDEV_TYPE=SimpleNamespace(POINTER=1),
             INDEV_STATE=SimpleNamespace(RELEASED=0, PRESSED=1),
@@ -46,6 +46,7 @@ class DisplayTests(unittest.TestCase):
             font_load=Mock(return_value=object()), scr_act=Mock(return_value=self.screen),
             indev_create=Mock(return_value=Mock()), color_hex=lambda value: value,
             obj=Mock(), label=Mock(), btn=button, point_t=lambda point: point,
+            img=Mock(), img_dsc_t=lambda descriptor: descriptor,
             timer_handler_run_in_period=Mock(),
         )
         self.touch = Mock()
@@ -76,7 +77,7 @@ class DisplayTests(unittest.TestCase):
         self.assertIsNot(first, second)
         self.assertEqual(len(first), 640 * 480 * 4)
         self.assertEqual(len(second), size)
-        self.lv.font_load.assert_called_once_with("A:/sdcard/balance_ui_28.fnt")
+        self.lv.font_load.assert_called_once_with("A:/sdcard/balance_ui_20.fnt")
         self.screen.set_style_text_font.assert_called_once_with(self.ui.font, 0)
         self.screen.set_style_bg_opa.assert_called_once_with(255, 0)
         for buffer in self.ui.buffers:
@@ -100,6 +101,26 @@ class DisplayTests(unittest.TestCase):
         self.touch.read.return_value = []
         self.ui._read_touch(None, data)
         self.assertEqual(data.state, 0)
+
+    def test_preview_pixels_overlay_scaling_and_no_ball_refresh(self):
+        frame = Mock()
+        frame.bytearray.return_value = bytes([0x12]) * (448 * 336 * 2)
+        self.ui.update(["a", "b", "c", "d"], "YOLO: NO BALL\nCALIBRATION PENDING", True,
+                       frame, (100, 200, 40, 20))
+        frame.draw_rectangle.assert_called_once_with(70, 140, 28, 14, color=(0, 255, 0), thickness=2)
+        frame.draw_cross.assert_called_once_with(84, 147, color=(255, 255, 0), size=8)
+        self.assertEqual(self.ui.preview_data, frame.bytearray.return_value)
+        self.assertEqual(self.ui.preview_descriptor["header"]["cf"], 9)
+        self.ui.preview.set_src.assert_called_once_with(self.ui.preview_descriptor)
+        self.ui.preview.invalidate.assert_called_once_with()
+        frame.reset_mock()
+        self.ui.update(["a", "b", "c", "d"], "YOLO: NO BALL", False, frame, None)
+        frame.draw_rectangle.assert_not_called()
+        frame.draw_cross.assert_not_called()
+        self.assertEqual(self.ui.preview.invalidate.call_count, 2)
+        frame.bytearray.return_value = b"bad size"
+        with self.assertRaises(ValueError):
+            self.ui.update(["a", "b", "c", "d"], "", False, frame, None)
 
 
 if __name__ == "__main__":
