@@ -67,12 +67,13 @@ class Commands:
             if index < 0:
                 self.buffer = self.buffer[-1:] if self.buffer[-1] == 0xA5 else bytearray()
                 break
-            del self.buffer[:index]
+            # MicroPython bytearray supports slicing but not item/slice deletion.
+            self.buffer = self.buffer[index:]
             if len(self.buffer) < 4:
                 break
             payload_size = self.buffer[3]
             if self.buffer[2] != 1 or payload_size not in (1, 1 + MENU_ROWS * MENU_COLS):
-                del self.buffer[0]
+                self.buffer = self.buffer[1:]
                 continue
             packet_size = payload_size + 6
             if len(self.buffer) < packet_size:
@@ -80,9 +81,9 @@ class Commands:
             packet = self.buffer[:packet_size]
             received_crc = packet[-2] | (packet[-1] << 8)
             if crc16(packet[2:-2]) != received_crc:
-                del self.buffer[0]
+                self.buffer = self.buffer[1:]
                 continue
-            del self.buffer[:packet_size]
+            self.buffer = self.buffer[packet_size:]
             if payload_size == 1 and packet[4] in (START, STOP):
                 command = packet[4]
             elif payload_size > 1 and packet[4] == MENU_MESSAGE:
