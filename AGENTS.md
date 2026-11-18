@@ -4,7 +4,7 @@
 
 - `k230/` 是亚博带触摸屏 K230 的 CanMV 程序，先阅读 `k230/README.md`。部署需要 Python 文件、字体和字体许可证。
 - 根目录 C 工程仍是 TI MSPM0 / CCS 平衡工程，尚未移植平衡控制到 STM32F407VET6。
-- `stm32f407_uart_test/` 是独立的 F407 通讯与 X42S 点动 Keil 工程。USART3：PD9 RX 接 K230 IO9 TX，PD8 TX 接 K230 IO10 RX，两板共地，115200/8N1。新增 `Firmware/F407_K230_Stepper_Jog.hex`，每次点动用 PE9/TIM1_CH1 发一个 STEP 脉冲，PE7 输出方向，F407 回传相对上电零点的净步数。参考 ZIP 的方向/计数思路沿用，驱动接口按实物接线改为 STEP/DIR。Keil 编译、25 项 C 协议/点动检查及 12 项 Python 检查通过。实机烧录、脉冲波形和两端限位待验证。
+- `stm32f407_uart_test/` 是独立的 F407 通讯与 X42S 点动 Keil 工程。USART3：PD9 RX 接 K230 IO9 TX，PD8 TX 接 K230 IO10 RX，两板共地，115200/8N1。点动用 PE9/TIM1_CH1 发一个 STEP 脉冲，PE7 输出方向，F407 回传相对上电零点的净步数。Keil 编译、25 项 C 检查及 12 项 Python 检查通过。F407 已用 CubeProgrammer 烧录并读回校验；K230 的点动脚本和字库已写入 SD 卡并读回校验。点动版开机画面、双板回包、PE9 波形、电机实际转向和两端限位待现场验证。详见该目录 README。
 - 平台没有小车底盘。小车相关逻辑已移除，钢球速度补偿 KFF/KFF2 必须保留。
 - 已选择外部钢球 Model2（nncase 2.9，来源与校验见 `k230/model_manifest.json`），通过板上原生 `libs.YOLO.YOLO11` 接入；适配其 `[xywh_boxes, class_ids, scores]` 返回格式。模型用 `tools/download_steel_ball_model.py` 下载，不重复提交权重。保留原生 `libs`，不要用上游完整 main.py 覆盖本工程的触控/二进制串口程序。
 - 毫米标定仍未填写，因此即使检测到球也发送 LOST；屏幕只显示像素坐标和置信度供验证，不能宣称已经实现闭环平衡。
