@@ -91,8 +91,10 @@ class DisplayTests(unittest.TestCase):
         self.assertEqual(self.driver.flush_ready.call_count, 3)
 
     def test_button_bindings_and_touch_release(self):
+        self.assertEqual(len(self.buttons), 6)
         for button in self.buttons:
-            callback = button.add_event.call_args.args[0]
+            callback, event, _ = button.add_event.call_args.args
+            self.assertEqual(event, self.lv.EVENT.CLICKED)
             callback(None)
         self.assertEqual(self.sent, [0, 1, 2, 3])
         data = SimpleNamespace()
@@ -103,12 +105,35 @@ class DisplayTests(unittest.TestCase):
         self.ui._read_touch(None, data)
         self.assertEqual(data.state, 0)
 
+    def test_jog_uses_live_f407_count_and_ignores_legacy_or_stale_menu(self):
+        forward, back = [button.add_event.call_args.args[0] for button in self.buttons[-2:]]
+        frame = Mock()
+        frame.bytearray.return_value = bytes(448 * 336 * 2)
+        for row, connected in (("RUN:ON E:0 C:0", True), ("STEP:+0", False),
+                               ("STEP:+0 ERR", True)):
+            self.ui.update(["", "", "", row], "", connected, frame, None)
+            forward(None)
+            back(None)
+        self.assertEqual(self.sent, [])
+        self.ui.update(["", "", "", "STEP:+0"], "", True, frame, None)
+        forward(None)
+        back(None)
+        self.assertEqual(self.sent, [4, 5])
+        self.ui.lines[3].set_text.assert_called_with("步数 +0")
+        self.ui.update(["", "", "", "STEP:-1"], "", True, frame, None)
+        self.ui.lines[3].set_text.assert_called_with("步数 -1")
+        self.ui.update(["", "", "", "STEP:-1"], "", False, frame, None)
+        self.ui.lines[3].set_text.assert_called_with("步数 --")
+        forward(None)
+        self.assertEqual(self.sent, [4, 5])
+
     def test_preview_pixels_overlay_scaling_and_no_ball_refresh(self):
         frame = Mock()
         frame.bytearray.return_value = bytes([0x12]) * (448 * 336 * 2)
         self.ui.update(["a", "b", "c", "d"], "YOLO: NO BALL\nCALIBRATION PENDING", True,
                        frame, (100, 200, 40, 20))
-        frame.draw_line.assert_called_once_with(0, 168, 447, 168, color=(255, 0, 0), thickness=2)
+        y = self.module.ALIGN_LINE_Y
+        frame.draw_line.assert_called_once_with(0, y, 447, y, color=(255, 0, 0), thickness=2)
         frame.draw_rectangle.assert_called_once_with(70, 140, 28, 14, color=(0, 255, 0), thickness=2)
         frame.draw_cross.assert_called_once_with(84, 147, color=(255, 255, 0), size=8)
         self.assertEqual(self.ui.preview_data, frame.bytearray.return_value)
@@ -117,7 +142,7 @@ class DisplayTests(unittest.TestCase):
         self.ui.preview.invalidate.assert_called_once_with()
         frame.reset_mock()
         self.ui.update(["a", "b", "c", "d"], "YOLO: NO BALL", False, frame, None)
-        frame.draw_line.assert_called_once_with(0, 168, 447, 168, color=(255, 0, 0), thickness=2)
+        frame.draw_line.assert_called_once_with(0, y, 447, y, color=(255, 0, 0), thickness=2)
         frame.draw_rectangle.assert_not_called()
         frame.draw_cross.assert_not_called()
         self.assertEqual(self.ui.preview.invalidate.call_count, 2)

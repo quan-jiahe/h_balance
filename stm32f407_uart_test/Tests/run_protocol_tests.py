@@ -47,6 +47,8 @@ def main():
         "down": k230.build_key_frame(k230.KEY_DOWN),
         "ok": k230.build_key_frame(k230.KEY_OK),
         "back": k230.build_key_frame(k230.KEY_BACK),
+        "jog_forward": k230.build_key_frame(k230.TOUCH_KEYS[4]),
+        "jog_back": k230.build_key_frame(k230.TOUCH_KEYS[5]),
         "valid": k230.build_frame(0x1234, 0xDEADBEEF, (123, -45, 87, k230.RAW_VALID)),
         "lost": k230.build_frame(2, 200, k230.LOST_MEASUREMENT),
     }
@@ -108,6 +110,7 @@ def main():
         assert expected in decoder.menu_lines[0]
         assert decoder.menu_lines[1] == "OBS:1 LOST"
         assert decoder.menu_lines[2] == "KEY:UP V:1"
+        assert decoder.menu_lines[3] == "STEP:+1"
         bad_crc = bytearray(packet)
         bad_crc[-1] ^= 1
         decoder.feed(bad_crc)
@@ -116,6 +119,7 @@ def main():
     assert decoder.feed(bytes(cpu.mem_read(0x2001E208, 7))) == k230.START
     print(f"PASS: {checks} C checks; real K230 packets -> C parser -> real K230 decoder")
     print("PASS: bad CRC, noise, truncated frames, key limits, tick wrap and link timeout")
+    print("PASS: jog direction, one pulse per valid command, count and pulse-fault handling")
 
 
 if __name__ == "__main__":

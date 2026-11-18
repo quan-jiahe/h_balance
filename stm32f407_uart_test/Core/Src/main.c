@@ -14,7 +14,9 @@ int main(void)
         uint8_t byte;
         while (board_uart_read(&byte)) {
             const uint8_t command = link_test_feed(&link, byte, board_millis());
-            if (command != 0u) {
+            if (command == LINK_JOG_FORWARD || command == LINK_JOG_BACK) {
+                link_test_jog(&link, command == LINK_JOG_FORWARD);
+            } else if (command != 0u) {
                 uint8_t packet[7];
                 link_test_command(command, packet);
                 board_uart_write(packet, sizeof(packet));

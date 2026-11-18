@@ -8,6 +8,10 @@ static uint8_t rx_buffer[256];
 static volatile uint16_t rx_head;
 static volatile uint16_t rx_tail;
 
+/* Common-anode STEP input: idle high, pulse low. Clear CC1P for active high. */
+#define STEP_POLARITY TIM_CCER_CC1P
+#define STEP_DIR_PIN (1u << 7)
+
 void SystemInit(void)
 {
     SCB->CPACR |= (0xFu << 20);
@@ -25,6 +29,30 @@ void SystemInit(void)
 void SystemCoreClockUpdate(void)
 {
     SystemCoreClock = 16000000u;
+}
+
+static void step_init(void)
+{
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOEEN;
+    RCC->APB2ENR |= RCC_APB2ENR_TIM1EN;
+    (void)RCC->APB2ENR;
+
+    /* PWM2 holds STEP idle until CCR1, then drives it until the one-pulse update. */
+    TIM1->CR1 = TIM_CR1_OPM;
+    TIM1->PSC = 15u;  /* 16 MHz TIM1 clock, 1 us per count. */
+    TIM1->ARR = 199u;
+    TIM1->CCR1 = 100u;
+    TIM1->CCMR1 = TIM_CCMR1_OC1M_0 | TIM_CCMR1_OC1M_1 | TIM_CCMR1_OC1M_2;
+    TIM1->EGR = TIM_EGR_UG;
+    TIM1->CCER = TIM_CCER_CC1E | STEP_POLARITY;
+    TIM1->BDTR = TIM_BDTR_MOE;
+
+    /* Attach PE9 to the idle timer output and PE7 to the direction latch. */
+    GPIOE->BSRR = STEP_DIR_PIN;
+    GPIOE->OTYPER &= ~(STEP_DIR_PIN | (1u << 9));
+    GPIOE->AFR[1] = (GPIOE->AFR[1] & ~(15u << 4)) | (1u << 4);
+    GPIOE->MODER = (GPIOE->MODER & ~((3u << 14) | (3u << 18)))
+                   | (1u << 14) | (2u << 18);
 }
 
 void board_init(void)
@@ -52,6 +80,26 @@ void board_init(void)
     NVIC_EnableIRQ(USART3_IRQn);
     USART3->CR1 = USART_CR1_UE | USART_CR1_TE | USART_CR1_RE | USART_CR1_RXNEIE;
     (void)SysTick_Config(SystemCoreClock / 1000u);
+    step_init();
+}
+
+bool board_step_pulse(bool forward)
+{
+    GPIOE->BSRR = forward ? STEP_DIR_PIN : STEP_DIR_PIN << 16;
+    TIM1->SR = 0;
+    TIM1->CR1 = TIM_CR1_OPM | TIM_CR1_CEN;
+    const uint32_t start = board_millis();
+    while (TIM1->CR1 & TIM_CR1_CEN) {
+        if ((uint32_t)(board_millis() - start) >= 3u) {
+            TIM1->CR1 = TIM_CR1_OPM;
+            TIM1->CNT = 0;
+            return false;
+        }
+    }
+    /* Keep DIR stable after the final STEP edge even for queued clicks. */
+    const uint32_t end = board_millis();
+    while ((uint32_t)(board_millis() - end) < 2u) { }
+    return (TIM1->SR & TIM_SR_UIF) != 0u;
 }
 
 void SysTick_Handler(void)

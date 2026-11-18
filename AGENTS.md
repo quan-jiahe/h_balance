@@ -4,7 +4,7 @@
 
 - `k230/` 是亚博带触摸屏 K230 的 CanMV 程序，先阅读 `k230/README.md`。部署需要 Python 文件、字体和字体许可证。
 - 根目录 C 工程仍是 TI MSPM0 / CCS 平衡工程，尚未移植平衡控制到 STM32F407VET6。
-- `stm32f407_uart_test/` 是独立的 F407 通讯测试 Keil 工程，含源码和已编译 HEX。USART3：PD9 RX 接 K230 IO9 TX，PD8 TX 接 K230 IO10 RX，两板共地，115200/8N1。已完成 Keil 编译与 C/K230 协议软件互通检查，尚未通过 ST-Link 烧录或双板实测。它不控制电机，四个触控按钮用于测试值、START/STOP 和清零；详见该目录 README。
+- `stm32f407_uart_test/` 是独立的 F407 通讯与 X42S 点动 Keil 工程。USART3：PD9 RX 接 K230 IO9 TX，PD8 TX 接 K230 IO10 RX，两板共地，115200/8N1。新增 `Firmware/F407_K230_Stepper_Jog.hex`，每次点动用 PE9/TIM1_CH1 发一个 STEP 脉冲，PE7 输出方向，F407 回传相对上电零点的净步数。参考 ZIP 的方向/计数思路沿用，驱动接口按实物接线改为 STEP/DIR。Keil 编译、25 项 C 协议/点动检查及 12 项 Python 检查通过。实机烧录、脉冲波形和两端限位待验证。
 - 平台没有小车底盘。小车相关逻辑已移除，钢球速度补偿 KFF/KFF2 必须保留。
 - 已选择外部钢球 Model2（nncase 2.9，来源与校验见 `k230/model_manifest.json`），通过板上原生 `libs.YOLO.YOLO11` 接入；适配其 `[xywh_boxes, class_ids, scores]` 返回格式。模型用 `tools/download_steel_ball_model.py` 下载，不重复提交权重。保留原生 `libs`，不要用上游完整 main.py 覆盖本工程的触控/二进制串口程序。
 - 毫米标定仍未填写，因此即使检测到球也发送 LOST；屏幕只显示像素坐标和置信度供验证，不能宣称已经实现闭环平衡。
@@ -13,7 +13,7 @@
 - 模式导航使用 K230 触控，经串口控制主控菜单。协议见 `k230/README.md` 与 `user_driver/mspm0_k230_comm.h`。
 - LCD 使用单个 OSD0、BGRA 双缓冲合成。预览版左侧为 448×336 RGB565 相机画面，顶部/右侧为 20 像素状态与主控信息，底部保留四个按钮。预览通过 LVGL image 的持久像素缓冲合成，禁止重新引入相机/UI 两个 OSD 图层。AI 为通道 2 的 640×480 RGBP888，预览为通道 0。实际显示必须通过 VO/WBC 或现场确认，不能仅检查 LVGL 内存缓冲。
 - 本板 LVGL 图像接口实际为 `lv.img` / `lv.img_dsc_t`，头字段为 `always_zero/cf/w/h`，RGB565 常量为 9；不要直接套用新版 `lv.image_dsc_t` 或 IMAGE_HEADER_MAGIC。预览版已在板上运行 180 帧，VO/WBC 截图显示相机画面、主控回包与四个按钮正常；用户复位后也确认预览和按钮正常。PC 共 10 项检查通过。物理按键动作、钢球实物精度与毫米标定尚未验证。
-- 摄像头安装辅助红线在 `k230/touch_ui.py` 顶部通过 `ALIGN_LINE_Y` 调整，默认预览 Y=168（整屏 Y=232、AI 图像 Y=240），范围 0..335；无球或暂停识别时仍显示。辅助线只画在预览通道，不参与模型或毫米标定。位置和边界检查加入显示测试，PC 共 11 项检查通过。
+- 摄像头安装辅助红线在 `k230/touch_ui.py` 顶部通过 `ALIGN_LINE_Y` 调整，当前预览 Y=150（整屏 Y=214），范围 0..335。无球或暂停识别时仍显示。
 
 ## 两台电脑协作
 

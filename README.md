@@ -4,7 +4,7 @@
 
 - K230 部署、串口协议和待完成项：[k230/README.md](k230/README.md)。
 - 钢球 Model2 的下载、运行库依赖与标定说明：[k230/MODEL.md](k230/MODEL.md)。
-- STM32F407VET6 完整 Keil 通讯测试工程和 HEX：[stm32f407_uart_test/README.md](stm32f407_uart_test/README.md)。
+- STM32F407VET6 完整 Keil 通讯与 X42S 单脉冲点动工程及 HEX。[F407 测试说明](stm32f407_uart_test/README.md)
 - 两台电脑上的 Codex 接手前先阅读 [AGENTS.md](AGENTS.md)。
 - 当前平衡控制 C 工程仍为 TI MSPM0 工程；K230 已接入钢球 Model2，毫米标定、真实场景识别效果及 F407 平衡控制移植仍待完成。
 - 本机设备备份与编译缓存不进入 Git；K230 字体及许可证随代码提交。

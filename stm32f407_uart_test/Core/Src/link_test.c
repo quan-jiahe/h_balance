@@ -1,4 +1,5 @@
 #include "link_test.h"
+#include "board.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -56,9 +57,9 @@ uint8_t link_test_feed(LinkTest *link, uint8_t byte, uint32_t now_ms)
         if (size == 18u) {
             ++link->observations;
             link->last_status = data[15];
-        } else if (data[4] >= 0x40u && data[4] <= 0x44u) {
+        } else if (data[4] >= 0x40u && data[4] <= LINK_JOG_BACK) {
             const uint8_t key = data[4];
-            if (key != 0x44u) {
+            if (key < 0x44u) {
                 link->last_key = key;
             }
             switch (key) {
@@ -74,6 +75,10 @@ uint8_t link_test_feed(LinkTest *link, uint8_t byte, uint32_t now_ms)
                 break;
             case 0x43:
                 link->value = 0;
+                break;
+            case LINK_JOG_FORWARD:
+            case LINK_JOG_BACK:
+                reply = key;
                 break;
             default:
                 break;
@@ -91,6 +96,17 @@ uint8_t link_test_feed(LinkTest *link, uint8_t byte, uint32_t now_ms)
         link->used = (uint8_t)(link->used - size);
     }
     return reply;
+}
+
+void link_test_jog(LinkTest *link, bool forward)
+{
+    if (link->step_fault) { return; }
+    if (forward ? link->steps == INT32_MAX : link->steps == INT32_MIN) { return; }
+    if (board_step_pulse(forward)) {
+        link->steps += forward ? 1 : -1;
+    } else {
+        link->step_fault = 1;
+    }
 }
 
 void link_test_command(uint8_t command, uint8_t packet[7])
@@ -124,13 +140,16 @@ void link_test_menu(const LinkTest *link, uint32_t now_ms,
     packet[4] = 0x50;
     snprintf((char *)packet + 5, 22, "F407 RX:%s N:%lu", rx,
              (unsigned long)(link->packets % 100000u));
+    if (uart_errors || link->crc_errors) {
+        snprintf((char *)packet + 5, 22, "RX:%s E:%lu C:%lu", rx,
+                 (unsigned long)(uart_errors % 1000u),
+                 (unsigned long)(link->crc_errors % 1000u));
+    }
     snprintf((char *)packet + 27, 22, "OBS:%lu %s",
              (unsigned long)(link->observations % 100000u), observation);
     snprintf((char *)packet + 49, 22, "KEY:%s V:%ld", key, (long)link->value);
-    snprintf((char *)packet + 71, 22, "RUN:%s E:%lu C:%lu",
-             link->stream_enabled ? "ON" : "OFF",
-             (unsigned long)(uart_errors % 1000u),
-             (unsigned long)(link->crc_errors % 1000u));
+    snprintf((char *)packet + 71, 22, "STEP:%+ld%s",
+             (long)link->steps, link->step_fault ? " ERR" : "");
     const uint16_t crc = link_crc16(packet + 2, LINK_MENU_SIZE - 4u);
     packet[93] = (uint8_t)crc;
     packet[94] = (uint8_t)(crc >> 8);

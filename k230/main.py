@@ -22,6 +22,9 @@ KEY_DOWN = 0x41
 KEY_OK = 0x42
 KEY_BACK = 0x43
 MENU_SYNC = 0x44
+KEY_JOG_FORWARD = 0x45
+KEY_JOG_BACK = 0x46
+TOUCH_KEYS = (KEY_UP, KEY_DOWN, KEY_OK, KEY_BACK, KEY_JOG_FORWARD, KEY_JOG_BACK)
 MENU_MESSAGE = 0x50
 MENU_ROWS = 4
 MENU_COLS = 22
@@ -47,7 +50,7 @@ def build_frame(sequence, timestamp_ms, measurement):
 
 
 def build_key_frame(key):
-    if key not in (KEY_UP, KEY_DOWN, KEY_OK, KEY_BACK, MENU_SYNC):
+    if key not in TOUCH_KEYS and key != MENU_SYNC:
         raise ValueError("unknown touch event")
     body = bytes((1, 1, key))
     return b"\xA5\x5A" + body + struct.pack("<H", crc16(body))
@@ -194,7 +197,7 @@ def run():
         sensor.run()
         detector = SteelBallDetector(WIDTH, HEIGHT)
         ui = TouchMenu(lambda index: write_frame(
-            uart, build_key_frame((KEY_UP, KEY_DOWN, KEY_OK, KEY_BACK)[index]),
+            uart, build_key_frame(TOUCH_KEYS[index]),
         ))
         previous_ms = time.ticks_ms()
         last_sync_ms = time.ticks_add(previous_ms, -1000)

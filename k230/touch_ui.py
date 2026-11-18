@@ -8,7 +8,7 @@ from media.display import Display
 
 PREVIEW_WIDTH = 448
 PREVIEW_HEIGHT = 336
-ALIGN_LINE_Y = PREVIEW_HEIGHT // 2  # 168; preview Y=0..335, increases downward.
+ALIGN_LINE_Y = 150  # Preview Y=0..335, increases downward.
 
 
 class TouchMenu:
@@ -18,6 +18,7 @@ class TouchMenu:
         self.menu_revision = 0
         self.last_lines = None
         self.last_status = None
+        self.jog_ready = False
         lv.init()
         self.font = lv.font_load("A:/sdcard/balance_ui_20.fnt")
         if self.font is None:
@@ -83,19 +84,27 @@ class TouchMenu:
         help_label = lv.label(panel)
         help_label.set_pos(0, 184)
         help_label.set_width(156)
-        help_label.set_text("通讯测试按键\n上移：+1\n下移：-1\n确认：启停\n返回：清零")
+        help_label.set_text("上移：测试值+1\n下移：测试值-1\n确认：启停识别\n返回：清测试值\n前进/后退：1步")
 
-        for index, text in enumerate(("上移 +1", "下移 -1", "确认/启停", "返回/清零")):
+        self.jog_buttons = []
+        for index, text in enumerate(("上移 +1", "下移 -1", "确认", "返回", "前进", "后退")):
+            jog = index >= 4
             button = lv.btn(screen)
-            button.set_pos(8 + index * 158, 416)
-            button.set_size(150, 56)
-            button.set_style_bg_color(lv.color_hex(0x1C4D99), 0)
+            button.set_pos(8 + index * 105, 416)
+            button.set_size(98, 56)
+            button.set_style_bg_color(lv.color_hex(0x3D4655 if jog else 0x1C4D99), 0)
+            if jog:
+                self.jog_buttons.append(button)
             label = lv.label(button)
             label.set_style_text_font(self.font, 0)
             label.set_style_text_color(lv.color_hex(0xFFFFFF), 0)
             label.set_text(text)
             label.center()
-            button.add_event(lambda event, index=index: send_key(index), lv.EVENT.CLICKED, None)
+            def on_click(event, index=index, jog=jog):
+                if not jog or self.jog_ready:
+                    send_key(index)
+
+            button.add_event(on_click, lv.EVENT.CLICKED, None)
 
     def _flush(self, driver, area, color):
         try:
@@ -147,6 +156,17 @@ class TouchMenu:
         if status != self.last_status:
             self.status.set_text(status)
             self.last_status = status
+        if lines[3].startswith("STEP:"):
+            step_status = lines[3][5:]
+            jog_ready = connected and not step_status.endswith(" ERR")
+            lines = list(lines)
+            lines[3] = "步数 " + (step_status if connected else "--")
+        else:
+            jog_ready = False
+        if jog_ready != self.jog_ready:
+            for button in self.jog_buttons:
+                button.set_style_bg_color(lv.color_hex(0x166453 if jog_ready else 0x3D4655), 0)
+            self.jog_ready = jog_ready
         if lines != self.last_lines:
             for label, text in zip(self.lines, lines):
                 label.set_text(text)
