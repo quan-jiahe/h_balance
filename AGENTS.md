@@ -3,7 +3,7 @@
 ## 工程现状
 
 - `k230/` 是亚博带触摸屏 K230 的 CanMV 程序，先阅读 `k230/README.md`。部署需要 Python 文件、字体和字体许可证。
-- `k230/capture_training_photos.py` 与 `balance_uart.py` 是独立采图程序的部署文件。采图每 0.5 秒把无叠字 JPEG 记到 `/data`，LCD 实时预览只读取 F407 菜单广播。F407 往复运动及陀螺仪停用由另一端负责。待验证 K230 实机预览和双板回包。
+- `k230/capture_training_photos.py` 与 `balance_uart.py` 是独立采图程序的部署文件。采图每 1 秒把无叠字 JPEG 记到 `/data`，每成功保存 10 张通过原生 YbRGB 亮绿 180 ms。LCD 使用 RGB888 和单个 OSD0，先转 RGB565 保存再叠字预览。F407 往复运动及陀螺仪停用由另一端负责。板上已验证 13 张采集、显示输出截图和 LED 时序，双板回包待验证。
 - 根目录 C 工程仍是 TI MSPM0 / CCS 平衡工程，尚未移植平衡控制到 STM32F407VET6。
 - `stm32f407_uart_test/` 是独立的 F407 通讯与 X42S 点动 Keil 工程。USART3：PD9 RX 接 K230 IO9 TX，PD8 TX 接 K230 IO10 RX，两板共地，115200/8N1。点动用 PE9/TIM1_CH1 发一个 STEP 脉冲，PE7 输出方向，F407 回传相对上电零点的净步数。Keil 编译、25 项 C 检查及 12 项 Python 检查通过。F407 已用 CubeProgrammer 烧录并读回校验；K230 的点动脚本和字库已写入 SD 卡并读回校验。点动版开机画面、双板回包、PE9 波形、电机实际转向和两端限位待现场验证。详见该目录 README。
 - F407 上电自动自检版通过 SPI2 读取 ICM-45686。触底上电后先静止取 40 组重力样本并滤波，随后用 4 ms STEP 间隔分段扫描到 640 步（实测机械上界 650 步），反向回到水平附近后单步微调到 ±0.10° 内。加速滤波版通过 Keil 编译、42 项 Cortex-M 和 13 项 K230 检查。最新 Keil Load 仍报错，CubeProgrammer 用 100 kHz SWD 烧录验证，独立读回两次匹配全部 10,288 字节。实机运动与精度待验证，见 `stm32f407_uart_test/README.md`。

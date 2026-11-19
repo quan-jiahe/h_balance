@@ -8,13 +8,17 @@ from media.display import Display
 from media.media import MediaManager
 from media.sensor import CAM_CHN_ID_0, Sensor
 from balance_uart import Commands
+from ybUtils.YbRGB import YbRGB
 
 
 DATA_DIR = "/data"
 PHOTO_DIR = DATA_DIR + "/steel_ball_photos"
-INTERVAL_MS = 500
+INTERVAL_MS = 1000
 JPEG_QUALITY = 95
 STATUS_TIMEOUT_MS = 3000
+FLASH_EVERY = 10
+FLASH_MS = 180
+LED_OFF = (0, 0, 0)
 
 
 def create_batch():
@@ -34,17 +38,22 @@ def run():
     sensor = Sensor()
     sensor.reset()
     sensor.set_framesize(width=640, height=480, chn=CAM_CHN_ID_0)
-    sensor.set_pixformat(Sensor.RGB565, chn=CAM_CHN_ID_0)
+    # The board's direct ST7701 preview was verified with packed RGB888.
+    sensor.set_pixformat(Sensor.RGB888, chn=CAM_CHN_ID_0)
     count = 0
     last_capture_ms = None
     last_status_ms = None
     menu = Commands()
     uart = None
+    led = None
+    flash_started_ms = None
     display_ready = False
     media_ready = False
 
     os.exitpoint(os.EXITPOINT_ENABLE)
     try:
+        led = YbRGB()
+        led.show_rgb(LED_OFF)
         fpioa = FPIOA()
         fpioa.set_function(10, fpioa.UART1_RXD, ie=1, oe=0)
         uart = UART(UART.UART1, baudrate=115200, bits=UART.EIGHTBITS,
@@ -61,11 +70,17 @@ def run():
             started_ms = time.ticks_ms()
             if last_capture_ms is None or time.ticks_diff(started_ms, last_capture_ms) >= INTERVAL_MS:
                 filename = "%s/%06d.jpg" % (folder, count + 1)
-                frame.save(filename, quality=JPEG_QUALITY)
+                frame.to_rgb565().save(filename, quality=JPEG_QUALITY)
                 last_capture_ms = started_ms
                 count += 1
                 if count == 1 or count % 20 == 0:
                     print("Saved", filename)
+                if count % FLASH_EVERY == 0:
+                    led.show_rgb((0, 255, 0))
+                    flash_started_ms = time.ticks_ms()
+            if flash_started_ms is not None and time.ticks_diff(time.ticks_ms(), flash_started_ms) >= FLASH_MS:
+                led.show_rgb(LED_OFF)
+                flash_started_ms = None
 
             if uart.any():
                 revision = menu.menu_revision
@@ -83,6 +98,11 @@ def run():
     except KeyboardInterrupt:
         print("Stopped. Photos saved:", count)
     finally:
+        if led is not None:
+            try:
+                led.show_rgb(LED_OFF)
+            except Exception as exc:
+                print("LED cleanup failed:", exc)
         for resource, method in (
             (sensor, "stop"), (Display if display_ready else None, "deinit"),
             (MediaManager if media_ready else None, "deinit"), (uart, "deinit"),
