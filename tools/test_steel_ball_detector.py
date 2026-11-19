@@ -23,7 +23,8 @@ def load(name, path):
 
 
 detector = load("steel_detector_test", "k230/steel_ball_detector.py")
-protocol = load("ball_protocol_test", "k230/main.py")
+with patch.object(sys, "path", [str(ROOT / "k230")] + sys.path):
+    protocol = load("ball_protocol_test", "k230/main.py")
 
 
 class SteelDetectionTests(unittest.TestCase):

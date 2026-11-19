@@ -2,11 +2,11 @@
 
 ## 独立采集训练照片
 
-`capture_training_photos.py` 每 0.5 秒拍一张 640×480 JPEG，保存到 `/data/steel_ball_photos/batch_NNN/`。在 Windows 的“此电脑 → CanMV → data”中可找到照片。每次启动新开一批，从 `000001.jpg` 开始编号。K230 可以独立供电运行。如果存储写入报错，程序会停止拍摄并保留此前的照片。
+`capture_training_photos.py` 显示 640×480 实时预览，每 0.5 秒保存一张原始 JPEG 到 `/data/steel_ball_photos/batch_NNN/`。在 Windows 的“此电脑 → CanMV → data”中可找到照片。每次启动新开一批，从 `000001.jpg` 开始编号。屏幕左上角显示已保存张数和 F407 的状态回包，保存的照片没有状态文字。K230 独立运行时也能拍摄，界面显示 `F407: NO STATUS`。如果存储写入报错，程序会停止拍摄并保留此前的照片。
 
-先在 CanMV IDE 运行此脚本确认能生成照片。要让 K230 上电自动拍摄，先备份卡上的原 `main.py`，再把此脚本保存为 `/sdcard/main.py`。停止时可用 CanMV IDE 的停止按钮。恢复平衡界面时，把备份的 `main.py` 放回原位并重启。
+先把 `balance_uart.py` 复制到 `/sdcard/`，再用 CanMV IDE 运行拍照脚本。要上电自动拍摄，先备份卡上的原 `main.py`，再把拍照脚本保存为 `/sdcard/main.py`。停止时可用 CanMV IDE 的停止按钮。恢复平衡界面时，把备份的 `main.py` 放回原位并重启。
 
-采集周期会扣掉本帧拍摄和存储时间。若单帧耗时超过 0.5 秒，下一帧在保存完成后开始。PC 检查覆盖延时、批次编号和写入失败后的资源释放。已将独立脚本复制到板上并读回校验，向 `/data` 实际拍摄写入待验证。
+预览连续刷新。程序在距离上次拍摄至少 0.5 秒的下一帧保存 JPEG，存储较慢时可能延后。拍照程序仅接收 UART1 的 IO10（接 F407 PD8，另接 GND），115200/8N1。F407 可沿用每 250 ms 广播的四行菜单，建议往复固件使用 `MOTOR:FWD`、`MOTOR:REV`、`MOTOR:STOP` 或 `MOTOR:ERR` 及 `STEP:+123` 等 ASCII 行。每行最多 21 个可见字符。K230 显示实际收到的文字，3 秒无有效菜单则隐藏旧状态。协议格式见下文。新版预览和双板回包待实测。
 
 ## 平衡系统预览
 
@@ -15,6 +15,7 @@
 ## 文件与部署
 
 - `main.py`：相机、协议、触控事件发送、菜单接收和速度估计。
+- `balance_uart.py`：平衡和拍照程序共用的 F407 菜单解码器，复制到 `/sdcard/`。
 - `touch_ui.py`：LVGL 界面和 `TOUCH(0)` 输入。与 `main.py` 一起部署。
 - `steel_ball_detector.py`：调用板上原生 YOLO11，解码 steel 检测结果。
 - `kmodel/steel_ball_model2_nncase2.9.kmodel`：钢球模型，先在电脑运行 `py tools/download_steel_ball_model.py` 下载，再上传到 `/sdcard/kmodel/`。
@@ -24,7 +25,7 @@
 
 1. 使用亚博适配的 CanMV K230 固件和 CanMV IDE；这不是 STM32 的 `.hex` 固件。
 2. 先将 K230 内存卡 `/sdcard/main.py` **复制到电脑备份**。保存新 `main.py` 会替换原来的开机程序，可能是亚博自带 GUI。不要删除卡上的其他目录、库或模型。
-3. 在 CanMV IDE 连接设备，停止原程序，先把 `touch_ui.py`、`steel_ball_detector.py`、`balance_ui_20.fnt` 和 `FONT_LICENSE.txt` 上传到 `/sdcard/`，将模型上传到 `/sdcard/kmodel/`，保留原生 `libs` 目录，再打开本目录的 `main.py` 点击运行。
+3. 在 CanMV IDE 连接设备，停止原程序，先把 `balance_uart.py`、`touch_ui.py`、`steel_ball_detector.py`、`balance_ui_20.fnt` 和 `FONT_LICENSE.txt` 上传到 `/sdcard/`，将模型上传到 `/sdcard/kmodel/`，保留原生 `libs` 目录，再打开本目录的 `main.py` 点击运行。
 4. 正常时，左侧持续显示摄像头画面，无球或暂停识别时也会刷新。有球时叠加绿色框与黄色中心，顶部显示像素坐标、置信度或 `YOLO: NO BALL`；未标定时显示 `CALIBRATION PENDING`。没有配套主控连接时显示“未收到主控回包”，有连接后右侧显示主控返回的四行文字。
 5. 确认相机和屏幕正常后，使用 IDE 的“保存当前脚本到 CanMV 板（作为 main.py）”，重启验证离线运行。
 6. 恢复原 GUI 时，把备份的 `/sdcard/main.py` 放回原处并重启。

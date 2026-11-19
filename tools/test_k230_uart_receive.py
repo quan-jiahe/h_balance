@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 
 spec = importlib.util.spec_from_file_location(
-    "k230_receive_test", Path(__file__).resolve().parents[1] / "k230/main.py")
+    "k230_receive_test", Path(__file__).resolve().parents[1] / "k230/balance_uart.py")
 protocol = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(protocol)
 

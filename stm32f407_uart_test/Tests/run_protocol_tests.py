@@ -9,6 +9,7 @@ import importlib.util
 from pathlib import Path
 import struct
 import subprocess
+import sys
 import xml.etree.ElementTree as ET
 
 from unicorn import Uc, UC_ARCH_ARM, UC_MODE_THUMB, UC_MODE_MCLASS, UC_HOOK_INTR
@@ -37,6 +38,7 @@ def main():
     options = args.parse_args()
     root = Path(__file__).resolve().parents[1]
     repo = root.parent
+    sys.path.insert(0, str(repo / "k230"))
     build = root / "Tests/build"
     build.mkdir(parents=True, exist_ok=True)
     spec = importlib.util.spec_from_file_location("k230_protocol", repo / "k230/main.py")
