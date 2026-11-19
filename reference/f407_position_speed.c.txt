@@ -1,0 +1,327 @@
+/*
+ * Reference excerpt from F407bujin__2/Core/Src/main.c.
+ * Zero-initialize the controller state before the first vision sample.
+ * Each update takes X positions in pixels and a timestamp in milliseconds.
+ * The result is the signed motor position relative to level, in pulses.
+ */
+
+#include <math.h>
+#include <stdint.h>
+
+typedef struct
+{
+	float filtered_position;
+	float previous_position;
+	float velocity;
+	float velocity_reference;
+	float velocity_reference_envelope;
+	float stopping_distance;
+	float integral_pulses;
+	float previous_error;
+	float command_pulses;
+	uint32_t previous_tick;
+	uint8_t initialized;
+	uint8_t braking;
+	uint8_t settled;
+} BallBalanceController_t;
+
+#define MOTOR_PULSES_PER_REV   3200L
+#define ANGLE_LIMIT_DEG        17L
+
+/* 3200 * 20 / 360 = 177脉冲，即实际限幅约为 +/-19.9度 */
+#define ANGLE_LIMIT_PULSES \
+    ((MOTOR_PULSES_PER_REV * ANGLE_LIMIT_DEG) / 360L)
+#define MAX_ANGLE_PULSES ANGLE_LIMIT_PULSES
+
+/*
+ * Position-speed coupled controller.
+ * The velocity reference follows v_ref = sqrt(2*a*distance), so the ball
+ * accelerates when far away and is commanded to decelerate near the target.
+ */
+#define CTRL_POSITION_ALPHA          0.45f
+#define CTRL_VELOCITY_ALPHA          0.25f
+#define CTRL_PROFILE_ACCEL           220.0f
+#define CTRL_MAX_BALL_SPEED          180.0f
+#define CTRL_REF_ACCEL               300.0f
+#define CTRL_MAX_MEASURED_SPEED      500.0f
+#define CTRL_POSITION_GAIN           0.10f
+#define CTRL_VELOCITY_GAIN           0.28f
+#define CTRL_BRAKE_BOOST             1.60f
+#define CTRL_BRAKE_ENTER_RATIO       0.85f
+#define CTRL_BRAKE_EXIT_RATIO        0.55f
+#define CTRL_CENTER_I_GAIN           0.35f
+#define CTRL_CENTER_I_ZONE_PX        25.0f
+#define CTRL_CENTER_I_SPEED_PX_S     35.0f
+#define CTRL_CENTER_I_MAX_PULSES     6.0f
+#define CTRL_CENTER_BAND_PX          4.0f
+#define CTRL_CENTER_SPEED_PX_S       10.0f
+#define CTRL_SETTLE_EXIT_BAND_PX     8.0f
+#define CTRL_SETTLE_EXIT_SPEED_PX_S  25.0f
+#define CTRL_OUTPUT_GAIN             1.50f
+#define CTRL_MAX_COMMAND_STEP        8.0f
+#define CTRL_DEFAULT_DT              0.033f
+#define CTRL_MIN_DT                  0.010f
+#define CTRL_MAX_DT                  0.100f
+
+static float Control_ClampFloat(float value, float minimum, float maximum)
+{
+	if(value > maximum)
+	{
+		return maximum;
+	}
+	if(value < minimum)
+	{
+		return minimum;
+	}
+	return value;
+}
+
+/*
+ * Calculate the platform target position in motor pulses.
+ *
+ * Position term: points the platform toward the image target.
+ * Velocity term: tracks a distance-dependent speed reference.
+ * Braking term: increases damping when the measured stopping distance is
+ *               greater than the remaining distance to the target.
+ * Center integral: only compensates small static bias near the target.
+ */
+static int32_t BallBalance_Update(BallBalanceController_t *controller,
+                                  float target_position,
+                                  float measured_position,
+                                  uint32_t tick)
+{
+	float dt;
+	float raw_velocity;
+	float error;
+	float distance;
+	float direction;
+	float velocity_toward_target;
+	float allowed_speed;
+	float velocity_error;
+	float velocity_gain;
+	float reference_step;
+	float effective_distance;
+	float command;
+	float command_change;
+
+	if(controller->initialized == 0U)
+	{
+		controller->filtered_position = measured_position;
+		controller->previous_position = measured_position;
+		controller->previous_tick = tick;
+		controller->previous_error = target_position - measured_position;
+		controller->initialized = 1U;
+		return 0;
+	}
+
+	dt = (float)(tick - controller->previous_tick) * 0.001f;
+	controller->previous_tick = tick;
+
+	if((dt < CTRL_MIN_DT) || (dt > CTRL_MAX_DT))
+	{
+		dt = CTRL_DEFAULT_DT;
+	}
+
+	controller->filtered_position +=
+		CTRL_POSITION_ALPHA *
+		(measured_position - controller->filtered_position);
+
+	raw_velocity =
+		(controller->filtered_position - controller->previous_position) / dt;
+	controller->previous_position = controller->filtered_position;
+	raw_velocity = Control_ClampFloat(
+		raw_velocity,
+		-CTRL_MAX_MEASURED_SPEED,
+		CTRL_MAX_MEASURED_SPEED
+	);
+
+	controller->velocity +=
+		CTRL_VELOCITY_ALPHA *
+		(raw_velocity - controller->velocity);
+
+	error = target_position - controller->filtered_position;
+	distance = fabsf(error);
+
+	/*
+	 * Latch the stopped state with hysteresis.  A single dead band made image
+	 * noise repeatedly enable opposite tilt commands around the target.
+	 */
+	if(controller->settled == 0U)
+	{
+		if((distance <= CTRL_CENTER_BAND_PX) &&
+		   (fabsf(controller->velocity) <= CTRL_CENTER_SPEED_PX_S))
+		{
+			controller->settled = 1U;
+			controller->integral_pulses = 0.0f;
+		}
+	}
+	else if((distance >= CTRL_SETTLE_EXIT_BAND_PX) ||
+	        (fabsf(controller->velocity) >= CTRL_SETTLE_EXIT_SPEED_PX_S))
+	{
+		controller->settled = 0U;
+	}
+
+	if(error > 0.0f)
+	{
+		direction = 1.0f;
+	}
+	else if(error < 0.0f)
+	{
+		direction = -1.0f;
+	}
+	else
+	{
+		direction = 0.0f;
+	}
+
+	/*
+	 * This speed profile treats the image target as the end point on every
+	 * frame. Far away it permits acceleration; near the target it reduces
+	 * the allowed speed toward zero.
+	 */
+	/* Stop inside the centre band instead of planning to cross its centre. */
+	effective_distance = distance - CTRL_CENTER_BAND_PX;
+	if(effective_distance < 0.0f)
+	{
+		effective_distance = 0.0f;
+	}
+	allowed_speed = sqrtf(2.0f * CTRL_PROFILE_ACCEL * effective_distance);
+	allowed_speed = Control_ClampFloat(
+		allowed_speed,
+		0.0f,
+		CTRL_MAX_BALL_SPEED
+	);
+	controller->velocity_reference_envelope = direction * allowed_speed;
+
+	/* Ramp acceleration, but apply a falling speed envelope immediately. */
+	if(direction == 0.0f)
+	{
+		controller->velocity_reference = 0.0f;
+	}
+	else if((controller->velocity_reference * direction) < 0.0f)
+	{
+		/* Crossed the target: remove the old-direction demand first. */
+		controller->velocity_reference = 0.0f;
+	}
+	else if(fabsf(controller->velocity_reference) < allowed_speed)
+	{
+		reference_step = CTRL_REF_ACCEL * dt;
+		if(reference_step >
+		   (allowed_speed - fabsf(controller->velocity_reference)))
+		{
+			reference_step =
+				allowed_speed - fabsf(controller->velocity_reference);
+		}
+		controller->velocity_reference += direction * reference_step;
+	}
+	else
+	{
+		controller->velocity_reference =
+			controller->velocity_reference_envelope;
+	}
+
+	velocity_toward_target = controller->velocity * direction;
+	if(velocity_toward_target > 0.0f)
+	{
+		controller->stopping_distance =
+			(velocity_toward_target * velocity_toward_target) /
+			(2.0f * CTRL_PROFILE_ACCEL);
+	}
+	else
+	{
+		controller->stopping_distance = 0.0f;
+	}
+
+	/* Hysteresis prevents brake gain chatter around its threshold. */
+	if(velocity_toward_target <= 0.0f)
+	{
+		controller->braking = 0U;
+	}
+	else if(controller->braking == 0U)
+	{
+		controller->braking =
+			(uint8_t)(controller->stopping_distance >=
+			          (CTRL_BRAKE_ENTER_RATIO * distance));
+	}
+	else if(controller->stopping_distance <
+	        (CTRL_BRAKE_EXIT_RATIO * distance))
+	{
+		controller->braking = 0U;
+	}
+
+	velocity_error =
+		controller->velocity_reference - controller->velocity;
+	velocity_gain = CTRL_VELOCITY_GAIN;
+	if(controller->braking != 0U)
+	{
+		velocity_gain *= CTRL_BRAKE_BOOST;
+	}
+
+	/* Reduce old-direction integral immediately after crossing the target. */
+	if((error * controller->previous_error) < 0.0f)
+	{
+		controller->integral_pulses *= 0.25f;
+	}
+
+	/* Integral only handles small static bias near the center. */
+	if((controller->settled == 0U) &&
+	   (distance < CTRL_CENTER_I_ZONE_PX) &&
+	   (fabsf(controller->velocity) < CTRL_CENTER_I_SPEED_PX_S) &&
+	   (controller->braking == 0U))
+	{
+		controller->integral_pulses +=
+			CTRL_CENTER_I_GAIN * error * dt;
+		controller->integral_pulses = Control_ClampFloat(
+			controller->integral_pulses,
+			-CTRL_CENTER_I_MAX_PULSES,
+			CTRL_CENTER_I_MAX_PULSES
+		);
+	}
+	else
+	{
+		controller->integral_pulses *= 0.92f;
+	}
+
+	command =
+		(CTRL_POSITION_GAIN * error) +
+		(velocity_gain * velocity_error) +
+		controller->integral_pulses;
+
+	/*
+	 * Once settled, level the platform and clear the old integral.  The wider
+	 * exit threshold above prevents vision noise from restarting the loop.
+	 */
+	if(controller->settled != 0U)
+	{
+		command = 0.0f;
+		controller->integral_pulses = 0.0f;
+		controller->velocity_reference = 0.0f;
+		controller->braking = 0U;
+	}
+
+	/* Increase the complete controller output without changing P/I/D ratios. */
+	command *= CTRL_OUTPUT_GAIN;
+
+	command = Control_ClampFloat(
+		command,
+		-(float)MAX_ANGLE_PULSES,
+		(float)MAX_ANGLE_PULSES
+	);
+
+	/* Limit platform-angle acceleration to avoid throwing the ball. */
+	command_change = command - controller->command_pulses;
+	command_change = Control_ClampFloat(
+		command_change,
+		-CTRL_MAX_COMMAND_STEP,
+		CTRL_MAX_COMMAND_STEP
+	);
+	controller->command_pulses += command_change;
+	controller->command_pulses = Control_ClampFloat(
+		controller->command_pulses,
+		-(float)MAX_ANGLE_PULSES,
+		(float)MAX_ANGLE_PULSES
+	);
+
+	controller->previous_error = error;
+	return (int32_t)lroundf(controller->command_pulses);
+}

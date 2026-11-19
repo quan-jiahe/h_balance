@@ -19,7 +19,7 @@
 - `touch_ui.py`：LVGL 界面和 `TOUCH(0)` 输入。与 `main.py` 一起部署。
 - `steel_ball_detector.py`：调用板上原生 YOLO11，解码 steel 检测结果。
 - `kmodel/steel_ball_model2_nncase2.9.kmodel`：钢球模型，先在电脑运行 `py tools/download_steel_ball_model.py` 下载，再上传到 `/sdcard/kmodel/`。
-- `balance_ui_20.fnt`：预览界面使用的 20 像素中英文字库，必须上传到 `/sdcard/balance_ui_20.fnt`。旧的 28 像素字库可保留供旧版恢复。
+- `balance_ui_20.fnt`：预览界面使用的 20 像素中英文字库，必须上传到 `/sdcard/balance_ui_20.fnt`。回退旧版时，从相应 Git 版本取对应字库。
 - `FONT_LICENSE.txt`：字库所用思源黑体的 SIL Open Font License 授权文本。
 - `model_manifest.json`、`MODEL.md`：模型来源与校验信息；PC 测试在 `tools/test_*.py`，不用上传到板上。
 

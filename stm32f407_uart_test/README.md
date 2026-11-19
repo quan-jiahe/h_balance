@@ -24,9 +24,7 @@
 
 若换电脑后 Keil Load 报 `Target DLL has been cancelled`，留意前面的弹窗。旧版下载时实机复现的具体报错为 `Connection refused due to device mismatch`，CubeProgrammer 读到芯片 ID 为 `0x413`、512 KB Flash。修复设置为 **Options for Target → Debug → ST-Link Settings → Pack**，取消 **Debug Description → Enable**。本机对应 `.uvoptx` 的 `EnableFlashSeq` 为 `0`。在 **Flash Download** 使用 `STM32F4xx 512kB Flash`，选 **Erase Sectors、Program、Verify**。在 **Utilities** 选 **Use Target Driver for Flash Programming** 和 **Use Debug Driver**。设置后直接点 **Load**。
 
-以下为独立点动测试固件的接线与操作记录。
-
-这是完整源码的独立 Keil MDK 工程，用于测试双向串口与 X42S 单脉冲点动。仓库根目录的 MSPM0 工程负责原有平衡控制。
+以下接线适用于当前自动找平工程和独立点动固件。独立点动版的操作和实机验证记录供台架复查。仓库根目录的 MSPM0 工程负责原有平衡控制。
 
 ## 接线
 
@@ -51,7 +49,7 @@ PD8/PD9 的 USART3 AF7 映射依据：[ST 数据手册](https://www.st.com/resou
 ## 编译和烧录
 
 1. 用 Keil MDK 5 打开 `MDK-ARM/F407_K230_UART.uvprojx`，选择 **Arm Compiler 6**。本机已用 MDK 5.43 / AC6 6.24 完整编译，0 错误、0 警告。
-2. 直接烧录预编译的 `Firmware/F407_K230_Stepper_Jog.hex`。若按 F7 从源码重新编译，输出为 `MDK-ARM/Objects/F407_K230_UART.hex`。`Firmware/F407_K230_UART.hex` 是旧通讯测试备份。
+2. 当前源码按 F7 生成 `MDK-ARM/Objects/F407_K230_UART.hex`，对应 `Firmware/F407_K230_Startup_Level.hex`。独立点动使用 `Firmware/F407_K230_Stepper_Jog.hex`，对应源码可从 Git 提交 `60a9240` 恢复。
 3. 通过 ST-Link / SWD 烧录。可以直接用 STM32CubeProgrammer 或 ST-Link Utility 加载 HEX，核对芯片为 F407VE，Flash 起始地址 `0x08000000`，烧录后复位，BOOT0 为 0。
 4. 若直接用 Keil 下载：在 Options for Target → Debug 选择 **ST-Link Debugger / SW**；在 Flash Download 添加适用于 STM32F407 的 **STM32F4xx 512KB Flash** 算法。若列表没有该芯片/算法，先通过 Pack Installer 安装 `Keil::STM32F4xx_DFP`。工程已包含编译所需的 CMSIS 头文件和启动文件，编译本身不需要在线下载 HAL。
 5. 在 K230 上同时更新 `main.py`、`touch_ui.py` 和 `balance_ui_20.fnt`。首次部署的完整文件清单见 [K230 README](../k230/README.md)。串口接线后，等待主控菜单和步数出现。
@@ -106,7 +104,7 @@ F407 启动时把当前机械位置作为步数 `+0`，启动代码不发 STEP �
 
 ## 验证范围
 
-Keil 正式固件编译通过。Cortex-M 模拟器通过 25 项检查，覆盖 K230 真实编解码、正反向事件、脉冲接口调用次数、步数回包、故障和原有通讯回归。可选 PC 检查依赖 Python `unicorn` 包和本机 Keil：
+Keil 正式固件编译通过。当前 Cortex-M 模拟覆盖 42 项检查，包括 K230 真实编解码、正反向点动、步数回包、故障处理、行程限制和完整找平流程。PC 检查依赖 Python `unicorn` 包和本机 Keil。
 
 ```powershell
 py -m pip install unicorn

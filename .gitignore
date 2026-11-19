@@ -28,7 +28,7 @@ __pycache__/
 *.py[cod]
 /.clangd
 
-# Keil local state and build output; keep the distributable test HEX.
+# Keil local state and build output; keep the distributable firmware HEX.
 Objects/
 Listings/
 *.uvguix.*
@@ -40,3 +40,7 @@ Listings/
 
 # Download the upstream model with tools/download_steel_ball_model.py.
 /k230/kmodel/*.kmodel
+
+# Local training data and model runs.
+/datasets/
+/runs/

@@ -2,6 +2,7 @@
 
 ## 工程现状
 
+- 当前整合入口及采图后的数据集、训练交接见 [README.md](README.md)。MSPM0 控制实现留在 `user_driver/`，旧 F407 位置—速度控制参考留在 `reference/`。
 - `k230/` 是亚博带触摸屏 K230 的 CanMV 程序，先阅读 `k230/README.md`。部署需要 Python 文件、字体和字体许可证。
 - `k230/capture_training_photos.py` 与 `balance_uart.py` 是独立采图程序的部署文件。采图每 1 秒把无叠字 JPEG 记到 `/data`，每成功保存 10 张通过原生 YbRGB 亮绿 180 ms。LCD 使用 RGB888 和单个 OSD0，先转 RGB565 保存再叠字预览。F407 往复运动及陀螺仪停用由另一端负责。板上已验证 13 张采集、显示输出截图和 LED 时序，双板回包待验证。
 - 根目录 C 工程仍是 TI MSPM0 / CCS 平衡工程，尚未移植平衡控制到 STM32F407VET6。

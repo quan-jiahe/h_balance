@@ -1,56 +1,27 @@
-# h_balance
+# 钢球平衡工程
 
-钢球平衡系统：亚博带触摸屏 K230 负责视觉接口和触控菜单，通过串口与主控通信。
+K230 负责拍照、钢球识别和触控。STM32F407VET6 负责串口联调、X42S 点动和 ICM-45686 开机找平。钢球闭环控制的两个实现见下表。
 
-- K230 部署、串口协议和待完成项：[k230/README.md](k230/README.md)。
-- 钢球 Model2 的下载、运行库依赖与标定说明：[k230/MODEL.md](k230/MODEL.md)。
-- STM32F407VET6 已接入 ICM-45686。连杆触底上电后，固件静止采样并滤波，驱动 X42S 扫描到 640 步，再回到水平附近微调。加速滤波版已烧录并读回核对，实机运动与找平精度仍待验证。[F407 接线、固件与试机说明](stm32f407_uart_test/README.md)
-- 两台电脑上的 Codex 接手前先阅读 [AGENTS.md](AGENTS.md)。
-- 当前钢球平衡控制 C 工程为 TI MSPM0 工程。K230 已接入钢球 Model2，并在现场显示 F407 自检菜单。毫米标定、真实场景识别效果及 F407 钢球闭环控制仍待完成。
-- K230 字体及许可证随代码提交。本机设备备份、调试配置和编译缓存保存在各自电脑上。
-
-两台电脑各自克隆本仓库，开始任务前更新远程分支，每项任务使用独立的 `codex/` 分支。完成后提交并推送，再经审查合并到 `main`。Git 传递已提交的代码与文档，任务进度请记录到仓库中。
-
-以下保留原 MSPM0 示例说明。
-
-## Example Summary
-
-Empty project using DriverLib.
-This example shows a basic empty project using DriverLib with just main file
-and SysConfig initialization.
-
-## Peripherals & Pin Assignments
-
-| Peripheral | Pin | Function |
+| 用途 | 入口 | 当前状态 |
 | --- | --- | --- |
-| SYSCTL |  |  |
-| DEBUGSS | PA20 | Debug Clock |
-| DEBUGSS | PA19 | Debug Data In Out |
+| K230 独立采图 | [capture_training_photos.py](k230/capture_training_photos.py)、[部署说明](k230/README.md#独立采集训练照片) | 已实机验证 640×480 原始 JPEG、LCD 预览和每 10 张绿灯提示。串口状态显示可选。 |
+| STM32F407VET6 | [Keil 工程](stm32f407_uart_test/MDK-ARM/F407_K230_UART.uvprojx)、[接线与烧录](stm32f407_uart_test/README.md) | 保留可重建的开机找平固件和已经烧录校验的独立点动固件。K230 已显示 F407 自检菜单。 |
+| MSPM0 稳球 | [main.c](main.c)、[balance_pid.c](user_driver/balance_pid.c)、[pid.c](user_driver/pid.c) | CCS 工程。按毫米位置做 PID，保留线性和平方速度补偿 KFF/KFF2、定点和自动序列。 |
+| 旧 F407 稳球参考 | [位置—速度控制](reference/f407_position_speed.c.txt) | 从 F407bujin 原工程摘录。以像素位置计算速度参考、制动和中心稳定判定，输出相对水平位置的有符号电机脉冲目标。完整旧工程和角度限幅版本保存在本机设备备份。 |
+| K230 识别基线 | [main.py](k230/main.py)、[Model2 说明](k230/MODEL.md) | 保留 YOLO11 推理、相机预览、触控和二进制串口。像素到毫米的标定仍待完成，当前观测为 `LOST`。 |
 
-## BoosterPacks, Board Resources & Jumper Settings
+旧 F407 控制器原本在收到新视觉帧时调用，输入是目标 X 与测量 X（像素）及毫秒时钟。旧协议的 `BASIC.cy` 可携带目标 X，见本机 `device_backups/stepper_reference_20261118/F407bujin__2/Core/Src/main.c`。当前 Keil 工程运行的是找平与点动，接入钢球闭环仍待完成。
 
-Visit [LP_MSPM0G3507](https://www.ti.com/tool/LP-MSPM0G3507) for LaunchPad information, including user guide and hardware files.
+## 下一阶段
 
-| Pin | Peripheral | Function | LaunchPad Pin | LaunchPad Settings |
-| --- | --- | --- | --- | --- |
-| PA20 | DEBUGSS | SWCLK | N/A | <ul><li>PA20 is used by SWD during debugging<br><ul><li>`J101 15:16 ON` Connect to XDS-110 SWCLK while debugging<br><li>`J101 15:16 OFF` Disconnect from XDS-110 SWCLK if using pin in application</ul></ul> |
-| PA19 | DEBUGSS | SWDIO | N/A | <ul><li>PA19 is used by SWD during debugging<br><ul><li>`J101 13:14 ON` Connect to XDS-110 SWDIO while debugging<br><li>`J101 13:14 OFF` Disconnect from XDS-110 SWDIO if using pin in application</ul></ul> |
+等待 K230 完成采图。将 `/data/steel_ball_photos/batch_NNN/` 整批复制到电脑的 `datasets/steel_ball/raw/`，保留批次与 JPEG 原件。筛除损坏或重复帧，标注可见钢球并保留无球负样本。按采集批次划分训练、验证和测试集，避免相邻帧跨集合，再训练单类 `steel` YOLO 模型。训练结果放在 `runs/`。上板前以 Model2 为基线评估误检、漏检和定位误差，再导出与目标 K230 运行时兼容的 `.kmodel`。
 
-### Device Migration Recommendations
-This project was developed for a superset device included in the LP_MSPM0G3507 LaunchPad. Please
-visit the [CCS User's Guide](https://software-dl.ti.com/msp430/esd/MSPM0-SDK/latest/docs/english/tools/ccs_ide_guide/doc_guide/doc_guide-srcs/ccs_ide_guide.html#sysconfig-project-migration)
-for information about migrating to other MSPM0 devices.
+## 协作与回归
 
-### Low-Power Recommendations
-TI recommends to terminate unused pins by setting the corresponding functions to
-GPIO and configure the pins to output low or input with internal
-pullup/pulldown resistor.
+两台电脑从同一 Git 仓库更新。使用 `codex/` 任务分支，经审查合入 `main`。采集准备的整合分支为 `codex/pre-yolo-cleanup`。设备备份、模型下载文件、原始照片、训练输出和编译缓存留在本机。
 
-SysConfig allows developers to easily configure unused pins by selecting **Board**→**Configure Unused Pins**.
+本次整理通过 13 项 K230 回归和 42 项 F407 Cortex-M 模拟检查。Keil 干净构建复现了找平固件，采图脚本和共用串口模块与 K230 读回文件一致。
 
-For more information about jumper configuration to achieve low-power using the
-MSPM0 LaunchPad, please visit the [LP-MSPM0G3507 User's Guide](https://www.ti.com/lit/slau873).
-
-## Example Usage
-
-Compile, load and run the example.
+- K230 回归：`py -B -m unittest discover -s tools -p 'test_*.py' -v`
+- F407 编译和 Cortex-M 模拟：[F407 验证说明](stm32f407_uart_test/README.md#验证范围)
+- 设备恢复与接手：[AGENTS.md](AGENTS.md)
