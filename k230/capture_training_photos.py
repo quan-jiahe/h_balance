@@ -1,4 +1,4 @@
-"""Run on a Yahboom CanMV K230 to collect training photos to its SD card."""
+"""Collect training photos to the Yahboom CanMV K230 data partition."""
 
 import os
 import time
@@ -7,13 +7,14 @@ from media.media import MediaManager
 from media.sensor import CAM_CHN_ID_0, Sensor
 
 
-PHOTO_DIR = "/sdcard/steel_ball_photos"
+DATA_DIR = "/data"
+PHOTO_DIR = DATA_DIR + "/steel_ball_photos"
 INTERVAL_MS = 500
 JPEG_QUALITY = 95
 
 
 def create_batch():
-    if "steel_ball_photos" not in os.listdir("/sdcard"):
+    if "steel_ball_photos" not in os.listdir(DATA_DIR):
         os.mkdir(PHOTO_DIR)
     existing = os.listdir(PHOTO_DIR)
     index = 1
@@ -46,7 +47,7 @@ def run():
             if count == 1 or count % 20 == 0:
                 print("Saved", filename)
 
-            # shortcut: a slow SD write extends the interval; use buffering for strict timing.
+            # shortcut: slow storage extends the interval; use buffering for strict timing.
             remaining_ms = INTERVAL_MS - time.ticks_diff(time.ticks_ms(), started_ms)
             if remaining_ms > 0:
                 time.sleep_ms(remaining_ms)
