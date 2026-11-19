@@ -14,6 +14,7 @@ FRAME_PERIOD_MS = 20
 # Fill these only after measuring the real camera/platform geometry.
 X_ZERO_PX = None
 MM_PER_PIXEL = None  # Signed scale: positive x must agree with the controller.
+CENTER_BALANCE_X_PX = 320  # Measure the physical midpoint in the 640 px camera frame.
 
 RAW_VALID = 0x01
 LOST = 0x20
@@ -28,13 +29,22 @@ TOUCH_KEYS = (KEY_UP, KEY_DOWN, KEY_OK, KEY_BACK, KEY_JOG_FORWARD, KEY_JOG_BACK)
 LOST_MEASUREMENT = (0, 0, 0, LOST)
 
 
-def build_frame(sequence, timestamp_ms, measurement):
-    x_mm, velocity_mm_s, confidence, status = measurement
+def build_frame(sequence, timestamp_ms, measurement, center=False):
+    position, velocity, confidence, status = measurement
     body = struct.pack(
-        "<BBHIhhBB", 1, 12, sequence & 0xFFFF, timestamp_ms & 0xFFFFFFFF,
-        int(round(x_mm)), int(round(velocity_mm_s)), int(confidence), status,
+        "<BBHIhhBB", 2 if center else 1, 12, sequence & 0xFFFF, timestamp_ms & 0xFFFFFFFF,
+        int(round(position)), int(round(velocity)), int(confidence), status,
     )
     return b"\xA5\x5A" + body + struct.pack("<H", crc16(body))
+
+
+def center_measurement(detection, center_px):
+    if detection is None or not (0 <= center_px < WIDTH):
+        return LOST_MEASUREMENT
+    x, y, confidence = detection
+    if not (0 <= x < WIDTH and 0 <= y < HEIGHT and 50 <= confidence <= 100):
+        return LOST_MEASUREMENT
+    return x - center_px, 0, confidence, RAW_VALID
 
 
 def build_key_frame(key):
@@ -93,7 +103,7 @@ def write_frame(uart, packet):
         offset += written
 
 
-def run():
+def run(center_x_px=CENTER_BALANCE_X_PX):
     # Keep hardware imports here so the actual protocol code can be tested on PC.
     import gc
     import os
@@ -102,7 +112,7 @@ def run():
     from media.display import Display
     from media.media import MediaManager
     from touch_ui import TouchMenu, PREVIEW_WIDTH, PREVIEW_HEIGHT
-    from steel_ball_detector import SteelBallDetector
+    from steel_ball_detector import MODEL_PATH, SteelBallDetector
 
     sensor = None
     detector = None
@@ -113,6 +123,7 @@ def run():
     sequence = 0
     uptime_ms = 0
     enabled = True  # Stream on boot; the controller can send START/STOP.
+    center_mode = center_x_px is not None
     tracker = BallTracker()
     commands = Commands()
 
@@ -144,7 +155,7 @@ def run():
         last_sync_ms = time.ticks_add(previous_ms, -1000)
         last_menu_ms = None
         print("K230 preview: UART1 IO9/IO10, 115200 8N1")
-        print("Steel-ball Model2 loaded: pixel detection active; mm calibration pending")
+        print("Steel-ball model loaded:", MODEL_PATH, "center pixel:", center_x_px)
 
         while True:
             os.exitpoint()
@@ -165,12 +176,18 @@ def run():
             previous_ms = now_ms
             uptime_ms = (uptime_ms + elapsed_ms) & 0xFFFFFFFF
             detection = detector.detect(frame) if enabled else None
-            measurement = tracker.update(detection, elapsed_ms, X_ZERO_PX, MM_PER_PIXEL)
-            write_frame(uart, build_frame(sequence, uptime_ms, measurement))
+            if center_mode:
+                measurement = center_measurement(detection, center_x_px)
+            else:
+                measurement = tracker.update(detection, elapsed_ms, X_ZERO_PX, MM_PER_PIXEL)
+            write_frame(uart, build_frame(sequence, uptime_ms, measurement, center=center_mode))
             sequence = (sequence + 1) & 0xFFFF
 
             if not enabled:
                 label = "STOPPED - LOST"
+            elif center_mode:
+                label = ("X:%.0f / %.0f px C:%d%%" % (detection[0], center_x_px, detection[2])
+                         if measurement[3] == RAW_VALID else "NO VALID BALL - LOST")
             elif X_ZERO_PX is None or MM_PER_PIXEL is None:
                 label = ("YOLO X:%.0f Y:%.0f C:%d%%" % detection
                          if detection is not None else "YOLO: NO BALL")
@@ -192,7 +209,7 @@ def run():
     finally:
         if uart is not None:
             try:
-                write_frame(uart, build_frame(sequence, uptime_ms, LOST_MEASUREMENT))
+                write_frame(uart, build_frame(sequence, uptime_ms, LOST_MEASUREMENT, center=center_mode))
             except Exception as exc:
                 print("Final LOST frame failed:", exc)
         if ui is not None:

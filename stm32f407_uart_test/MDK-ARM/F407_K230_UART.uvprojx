@@ -404,6 +404,21 @@
               <FileType>1</FileType>
               <FilePath>..\Core\Src\startup_level.c</FilePath>
             </File>
+            <File>
+              <FileName>pulse_cycle.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\pulse_cycle.c</FilePath>
+            </File>
+            <File>
+              <FileName>center_balance.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\center_balance.c</FilePath>
+            </File>
+            <File>
+              <FileName>center_oled.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\center_oled.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

@@ -155,6 +155,32 @@ class DisplayTests(unittest.TestCase):
         forward(None)
         self.assertEqual(self.sent, [0, 4])
 
+    def test_pulse_cycle_disables_jog_and_shows_stop(self):
+        frame = Mock()
+        frame.bytearray.return_value = bytes(448 * 336 * 2)
+        for direction in ("FWD", "REV"):
+            self.ui.update(["RX:OK", "MOTOR:" + direction, "RANGE:0-650", "STEP:+325"],
+                           "", True, frame, None)
+            self.assertFalse(self.ui.jog_ready)
+            self.assertEqual(self.ui.last_help, "返回：STOP")
+
+    def test_center_balance_disables_jog_and_shows_stop(self):
+        frame = Mock()
+        frame.bytearray.return_value = bytes(448 * 336 * 2)
+        for state in ("BAL: STARTUP UP", "BAL: RETURN 270"):
+            self.ui.update(["RX:OK", state, "BACK:STOP", "STEP:500/650"], "", True, frame, None)
+            self.assertFalse(self.ui.jog_ready)
+            self.assertEqual(self.ui.last_help, "BACK:STOP")
+        self.ui.update(["RX:OK", "BAL: SET LEVEL", "UP/DN:25 JOG:1", "STEP:0/650"],
+                       "", True, frame, None)
+        self.assertTrue(self.ui.jog_ready)
+        self.assertIn("OK:SAVE LEVEL", self.ui.last_help)
+        for state in ("BAL: ACTIVE", "BAL: HOLD"):
+            self.ui.update(["RX:OK", state, "DX:-8px DIR:+1", "STEP:+2"],
+                           "", True, frame, None)
+            self.assertFalse(self.ui.jog_ready)
+            self.assertEqual(self.ui.last_help, "OK/BACK:STOP")
+
     def test_preview_pixels_overlay_scaling_and_no_ball_refresh(self):
         frame = Mock()
         frame.bytearray.return_value = bytes([0x12]) * (448 * 336 * 2)

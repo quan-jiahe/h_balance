@@ -38,8 +38,9 @@ uint8_t link_test_feed(LinkTest *link, uint8_t byte, uint32_t now_ms)
     link->buffer[link->used++] = byte;
     while (link->used >= 4u) {
         uint8_t *data = link->buffer;
-        if (data[0] != 0xA5u || data[1] != 0x5Au || data[2] != 1u
-                || (data[3] != 1u && data[3] != 12u)) {
+        const bool legacy_frame = data[2] == 1u && (data[3] == 1u || data[3] == 12u);
+        const bool center_frame = data[2] == 2u && data[3] == 12u;
+        if (data[0] != 0xA5u || data[1] != 0x5Au || (!legacy_frame && !center_frame)) {
             discard_byte(link);
             continue;
         }
@@ -54,7 +55,23 @@ uint8_t link_test_feed(LinkTest *link, uint8_t byte, uint32_t now_ms)
             discard_byte(link);
             continue;
         }
-        if (size == 18u) {
+        if (center_frame) {
+            const uint16_t px = (uint16_t)(data[10] | ((uint16_t)data[11] << 8));
+            const int32_t error = px <= INT16_MAX ? (int32_t)px : (int32_t)px - 65536;
+            const uint32_t sample_ms = (uint32_t)data[6] | ((uint32_t)data[7] << 8)
+                                     | ((uint32_t)data[8] << 16) | ((uint32_t)data[9] << 24);
+            const bool valid = data[15] == 1u && data[14] >= 50u && data[14] <= 100u
+                               && error > -640 && error < 640;
+            if (link->center_observations == 0 || sample_ms != link->center_sample_ms) {
+                link->center_error_px = (int16_t)error;
+                link->center_sample_ms = sample_ms;
+                link->center_rx_ms = now_ms;
+                link->center_valid = valid;
+                ++link->center_observations;
+            } else if (!valid) {
+                link->center_valid = false;
+            }
+        } else if (size == 18u) {
             ++link->observations;
             link->last_status = data[15];
         } else if (data[4] >= 0x40u && data[4] <= LINK_JOG_BACK) {

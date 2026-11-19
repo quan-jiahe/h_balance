@@ -8,6 +8,10 @@
 #define LINK_MENU_SIZE 95u
 #define LINK_START 0x30u
 #define LINK_STOP 0x31u
+#define LINK_KEY_UP 0x40u
+#define LINK_KEY_DOWN 0x41u
+#define LINK_KEY_OK 0x42u
+#define LINK_KEY_BACK 0x43u
 #define LINK_JOG_FORWARD 0x45u
 #define LINK_JOG_BACK 0x46u
 
@@ -25,6 +29,11 @@ typedef struct {
     uint32_t last_rx_ms;
     uint32_t packets;
     uint32_t observations;
+    uint32_t center_observations;
+    uint32_t center_rx_ms;
+    uint32_t center_sample_ms;
+    int16_t center_error_px;
+    bool center_valid;
     uint32_t crc_errors;
     int32_t value;
     int32_t steps;

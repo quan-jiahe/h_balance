@@ -52,6 +52,15 @@ class SteelDetectionTests(unittest.TestCase):
         self.assertEqual(tracker.update(observation, 40, 100, 0.5), (10, 0, 90, protocol.RAW_VALID))
         self.assertEqual(tracker.update(None, 40, 100, 0.5), protocol.LOST_MEASUREMENT)
 
+    def test_center_frames_use_pixel_offsets_and_separate_protocol_version(self):
+        measurement = protocol.center_measurement((300.5, 210, 90), 320)
+        self.assertEqual(measurement, (-19.5, 0, 90, protocol.RAW_VALID))
+        center_packet = protocol.build_frame(7, 60, measurement, center=True)
+        self.assertEqual(center_packet[:4], b"\xa5\x5a\x02\x0c")
+        self.assertEqual(protocol.build_frame(7, 60, measurement)[2], 1)
+        for detection in (None, (640, 210, 90), (300, 210, 49)):
+            self.assertEqual(protocol.center_measurement(detection, 320), protocol.LOST_MEASUREMENT)
+
     def test_runtime_configuration_rgbp_input_and_cleanup(self):
         model = Mock()
         model.run.return_value = [[[100, 200, 40, 20]], [0], [0.9]]

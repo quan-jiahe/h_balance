@@ -160,13 +160,26 @@ class TouchMenu:
             self.last_status = status
         if lines[3].startswith("STEP:"):
             step_status = lines[3][5:]
-            jog_ready = connected and not step_status.endswith(" ERR")
+            motor_cycle = lines[1].startswith("MOTOR:")
+            balance_mode = lines[1].startswith("BAL:")
+            setting_level = lines[1] == "BAL: SET LEVEL"
+            jog_ready = connected and (setting_level or not (motor_cycle or balance_mode)) and not step_status.endswith(" ERR")
             lines = list(lines)
             startup = lines[1].startswith("CAL:") or lines[1].startswith("HOME:")
             if startup and step_status.endswith(" ERR"):
                 step_status = step_status[:-4]
             lines[3] = "步数 " + (step_status if connected else "--")
-            if startup:
+            if setting_level:
+                help_text = "UP/DOWN:25\nOK:SAVE LEVEL\nBACK:STOP"
+            elif balance_mode:
+                if lines[1] == "BAL: STARTUP UP" or lines[1].startswith("BAL: RETURN "):
+                    help_text = "BACK:STOP"
+                else:
+                    help_text = ("OK/BACK:STOP" if lines[1] in ("BAL: ACTIVE", "BAL: HOLD")
+                                 else "UP:+  DOWN:-\nOK:START")
+            elif motor_cycle:
+                help_text = "返回：STOP" if lines[1] in ("MOTOR:FWD", "MOTOR:REV") else ""
+            elif startup:
                 help_text = {
                     "CAL: SET LOW": "上移：SAVE LOW",
                     "CAL: SET LEVEL": "下移：SAVE LEVEL",

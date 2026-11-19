@@ -27,3 +27,19 @@ Plant simulation: startup motion rejection, noisy gravity filter, full sweep to 
 Physical deployment: STM32CubeProgrammer at SWD 100 kHz, verify passed.
 Two independent SWD reads matched all 10288 firmware bytes. Powered motion and leveling accuracy: pending.
 SHA256: 2a23ca7c5b4a5e78af846a796e03f528a288eadd84893342135c1fa527ef33df
+
+Firmware: F407_K230_Photo_Pulse_Cycle.hex
+Target: STM32F407VET6, Keil MDK / Arm Compiler 6.7 with a local CMSIS compatibility option
+Build: 0 errors; Code=3844 RO-data=456 RW-data=4 ZI-data=1316 bytes
+HEX: 4312 bytes at 0x08000000..0x080010D7; checksums and Reset/SysTick/USART3 vectors verified
+Checks: 73 Cortex-M checks and 14 Python checks, including variable speed, no dwell and decoding F407 motor status
+Physical deployment: pending
+SHA256: 2aac836cbc05fa96a2234ffaf8c77401ebb5876319021fcc8fa00928369eb8a3
+
+Firmware: F407_K230_Center_Balance.hex
+Target: STM32F407VET6, Keil MDK / Arm Compiler 6.7 with a local CMSIS compatibility option
+Build: 0 errors, 0 warnings; Code=11892 RO-data=724 RW-data=8 ZI-data=1544 bytes
+HEX: 12624 bytes at 0x08000000..0x0800314F; checksums and Reset/SysTick/USART3 vectors verified
+Checks: 107 Cortex-M and 16 Python checks, including startup travel 0-650-310, standstill reference availability, vision handoff, automatic reacquisition and manual STOP
+Physical deployment: this revision has not been flashed. OLED controller, display and installed IMU readings need hardware verification.
+SHA256: d97099395224633d92d4fcd5ff02c49e5e2de73bd48f676e89efb299aa5ba7cf

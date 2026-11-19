@@ -1,6 +1,11 @@
 #include "board.h"
 #include "link_test.h"
-#include "startup_level.h"
+#ifdef F407_CENTER_BALANCE
+#include "center_balance.h"
+#include "center_oled.h"
+#else
+#include "pulse_cycle.h"
+#endif
 #include "stm32f4xx.h"
 
 int main(void)
@@ -10,31 +15,54 @@ int main(void)
     uint32_t last_menu_ms = 0;
     link_test_init(&link);
     board_init();
-    startup_level_init();
+#ifdef F407_CENTER_BALANCE
+    center_oled_init();
+    center_balance_init();
+#else
+    pulse_cycle_init(board_millis());
+#endif
 
     for (;;) {
         uint8_t byte;
         while (board_uart_read(&byte)) {
             link.key_event = 0;
+#ifdef F407_CENTER_BALANCE
+            link_test_feed(&link, byte, board_millis());
+            if (link.key_event) {
+                center_balance_key(&link, link.key_event, board_millis());
+            }
+#else
             const uint8_t command = link_test_feed(&link, byte, board_millis());
             if (link.key_event) {
-                startup_level_tick(&link, board_millis(), link.key_event);
+                pulse_cycle_tick(&link, board_millis(), link.key_event);
             }
             if (command == LINK_START || command == LINK_STOP) {
                 uint8_t packet[7];
                 link_test_command(command, packet);
                 board_uart_write(packet, sizeof(packet));
             }
+#endif
         }
         const uint32_t now_ms = board_millis();
-        startup_level_tick(&link, now_ms, 0);
+#ifdef F407_CENTER_BALANCE
+        center_balance_tick(&link, now_ms);
+#else
+        pulse_cycle_tick(&link, now_ms, 0);
+#endif
         if (link.menu_due || (uint32_t)(now_ms - last_menu_ms) >= 250u) {
-            startup_level_menu(&link);
+#ifdef F407_CENTER_BALANCE
+            center_balance_menu(&link, now_ms);
+#else
+            pulse_cycle_menu(&link);
+#endif
             link_test_menu(&link, now_ms, board_uart_errors(), menu);
             board_uart_write(menu, sizeof(menu));
             link.menu_due = 0;
             last_menu_ms = now_ms;
         }
+#ifdef F407_CENTER_BALANCE
+        center_oled_tick(&link, board_millis());
+#endif
         __WFI();
     }
 }

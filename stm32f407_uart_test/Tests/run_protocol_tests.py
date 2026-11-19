@@ -53,6 +53,11 @@ def main():
         "jog_back": k230.build_key_frame(k230.TOUCH_KEYS[5]),
         "valid": k230.build_frame(0x1234, 0xDEADBEEF, (123, -45, 87, k230.RAW_VALID)),
         "lost": k230.build_frame(2, 200, k230.LOST_MEASUREMENT),
+        "center_left": k230.build_frame(3, 300, k230.center_measurement((200, 250, 90), 320), center=True),
+        "center_right": k230.build_frame(4, 400, k230.center_measurement((440, 250, 90), 320), center=True),
+        "center_lost": k230.build_frame(5, 500, k230.LOST_MEASUREMENT, center=True),
+        "center_near_left": k230.build_frame(6, 600, k230.center_measurement((318, 250, 90), 320), center=True),
+        "center_near_right": k230.build_frame(7, 700, k230.center_measurement((322, 250, 90), 320), center=True),
     }
     (build / "fixtures.h").write_text("\n".join(
         "static const uint8_t fixture_%s[] = {%s};" %
@@ -100,9 +105,9 @@ def main():
     cpu.hook_add(UC_HOOK_INTR, lambda emulator, interrupt, user: emulator.emu_stop())
     cpu.mem_write(0xE000ED88, struct.pack("<I", 0x00F00000))
     cpu.emu_start(entry, 0, count=35000000)
-    failures, checks, done = struct.unpack("<III", cpu.mem_read(0x2001E000, 12))
+    failures, checks, done, first_failure = struct.unpack("<IIII", cpu.mem_read(0x2001E000, 16))
     assert done == 0xF4072300, "C test did not finish"
-    assert failures == 0, f"C test failure bitmask: {failures:#x}"
+    assert failures == 0, f"C test failure bitmask: {failures:#x}, first failed check: {first_failure}"
     decoder = k230.Commands()
     for offset, expected in ((0x100, "RX:OK"), (0x180, "RX:LOST")):
         packet = bytes(cpu.mem_read(0x2001E000 + offset, 95))
@@ -120,10 +125,17 @@ def main():
         assert decoder.menu_revision == previous + 1
     assert decoder.feed(bytes(cpu.mem_read(0x2001E200, 7))) == k230.STOP
     assert decoder.feed(bytes(cpu.mem_read(0x2001E208, 7))) == k230.START
+    decoder.feed(bytes(cpu.mem_read(0x2001E300, 95)))
+    assert decoder.menu_lines[1:] == ["MOTOR:STOP", "RANGE:0-650", "STEP:+0"]
+    decoder.feed(bytes(cpu.mem_read(0x2001E380, 95)))
+    assert decoder.menu_lines[1:3] == ["BAL: ACTIVE", "DX:+120px DIR:+1"]
     print(f"PASS: {checks} C checks; real K230 packets -> C parser -> real K230 decoder")
     print("PASS: bad CRC, noise, truncated frames, key limits, tick wrap and link timeout")
     print("PASS: jog direction, one pulse per valid command, count and pulse-fault handling")
     print("PASS: full upward sweep, gravity leveling, return, travel limits, stall, IMU loss and stop")
+    print("PASS: two 0-650 pulse cycles with IMU offline, variable speed, no dwell, stop and pulse fault")
+    print("PASS: center arming, pixel protocol, sign, travel limit, STOP, vision loss and timeout")
+    print("PASS: startup travel 0 -> 650 -> configured level, vision handoff and cancel")
 
 
 if __name__ == "__main__":
