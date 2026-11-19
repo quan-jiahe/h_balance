@@ -1,4 +1,20 @@
-# 钢球 Model2 部署说明
+# 钢球模型部署说明
+
+## 当前使用的本机训练模型
+
+当前 `steel_ball_detector.py` 加载 `/sdcard/kmodel/steel_ball_236_nncase2.9.kmodel`，沿用板上原生 `libs.YOLO.YOLO11`、实时预览、触控和二进制串口。旧 Model2 保留作回退。
+
+模型由本次筛选的 236 张照片训练，188 张训练、42 张验证、6 张作时间间隔隔离。YOLO11n 输入 320×320，最佳权重为第 25 轮。验证集 mAP50 为 0.995、mAP50–95 为 0.808，同批拍摄数据上的指标不能代表不同光照和背景的效果。
+
+使用 nncase 2.9.0 转换，40 张训练照片作量化标定，激活 uint8、权重 int16。预处理为 640×480 缩至 320×240，上下各填充 40 像素，填充值 128。模型输出为 `[1, 5, 2100]`。大小及 SHA256 见 `model_steel236.json`。
+
+本机产物在 `D:\h_balance\k230_export\steel_ball_236_nncase2.9.kmodel`，转换脚本在同目录 `convert_steel_ball.py`。权重不进入 Git，需要向另一台电脑单独传递并按清单校验。更换时同时上传模型和匹配的 `steel_ball_detector.py`，保留原生库。
+
+模型上传后已读回核对 SHA256。用户复位后确认有实时预览，并能框住实物钢球。PC 的 13 项 Python 检查通过。尚未测量不同光照、球在两端及快速运动时的检出率，也未完成毫米标定和闭环控制。
+
+## 原上游 Model2 回退
+
+以下下载命令只取得旧 Model2。回退时还需把 `steel_ball_detector.py` 的 `MODEL_PATH` 改回 `/sdcard/kmodel/steel_ball_model2_nncase2.9.kmodel`。
 
 模型来自 [pineapple-miriam/Yahboom-K230-SteelBall-Vision](https://github.com/pineapple-miriam/Yahboom-K230-SteelBall-Vision)，选择其 Model2、nncase 2.9 版本。来源提交、文件大小和 SHA256 固定在 `model_manifest.json`；模型不重复提交到本仓库。在电脑上运行以下命令即可取得同一文件：
 
@@ -30,7 +46,7 @@ py tools/download_steel_ball_model.py
 
 作者未对整个上游仓库声明统一 MIT/Apache 授权；其第三方与模型来源说明见上游 README。这里保留来源引用，不为模型另行声明许可证。
 
-## 本次验证
+## 原上游 Model2 的历史验证
 
 - 模型在实际 K230 上 SHA256 与清单一致，KPU 加载成功，输入/输出各一个。
 - 相机 RGBP888 推理、原有触控菜单与二进制串口程序一起连续运行 180 帧，VO/WBC 实际合成输出中菜单和四个按钮完整显示。

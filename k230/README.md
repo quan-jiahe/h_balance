@@ -10,7 +10,7 @@
 
 ## 平衡系统预览
 
-当前程序提供**YOLO11 钢球识别、实时画面预览、LVGL 触控和串口联调**，接入指定上游仓库的 Model2。屏幕左侧显示 448×336 实时画面，识别到钢球时画绿色框和黄色中心。右侧显示主控信息和步数，底部有原四个导航按钮及前进、后退按钮。像素到毫米的标定参数仍为 `None`，串口观测仍为 `LOST`。模型来源、所需运行库和下载方法见 [MODEL.md](MODEL.md)。
+当前程序提供**YOLO11 钢球识别、实时画面预览、LVGL 触控和串口联调**，使用本次 236 张照片训练并转换的 steel236 模型，用户已确认实机能框住钢球。屏幕左侧显示 448×336 实时画面，识别到钢球时画绿色框和黄色中心。右侧显示主控信息和步数，底部有原四个导航按钮及前进、后退按钮。像素到毫米的标定参数仍为 `None`，串口观测仍为 `LOST`。模型来源、所需运行库和下载方法见 [MODEL.md](MODEL.md)。
 
 ## 文件与部署
 
@@ -18,7 +18,7 @@
 - `balance_uart.py`：平衡和拍照程序共用的 F407 菜单解码器，复制到 `/sdcard/`。
 - `touch_ui.py`：LVGL 界面和 `TOUCH(0)` 输入。与 `main.py` 一起部署。
 - `steel_ball_detector.py`：调用板上原生 YOLO11，解码 steel 检测结果。
-- `kmodel/steel_ball_model2_nncase2.9.kmodel`：钢球模型，先在电脑运行 `py tools/download_steel_ball_model.py` 下载，再上传到 `/sdcard/kmodel/`。
+- `kmodel/steel_ball_236_nncase2.9.kmodel`：当前钢球模型，上传到 `/sdcard/kmodel/`。本机转换产物与校验说明见 [MODEL.md](MODEL.md)，`model_steel236.json` 记录大小和 SHA256。权重需单独传递，旧下载工具仅下载原 Model2。
 - `balance_ui_20.fnt`：预览界面使用的 20 像素中英文字库，必须上传到 `/sdcard/balance_ui_20.fnt`。回退旧版时，从相应 Git 版本取对应字库。
 - `FONT_LICENSE.txt`：字库所用思源黑体的 SIL Open Font License 授权文本。
 - `model_manifest.json`、`MODEL.md`：模型来源与校验信息；PC 测试在 `tools/test_*.py`，不用上传到板上。
@@ -153,7 +153,7 @@ K230 发给主控的触控事件采用同样的 7 字节封装：`40`=上、`41`
 
 模型已接入，正式用于控制前还需完成以下两步：
 
-1. `SteelBallDetector.detect(frame)` 已接入 Model2：输入为 640×480 RGBP888，返回 `(球心x像素, 球心y像素, 置信度0到100)`，没有球返回 `None`。先验证本平台的识别效果，并将 `steel_ball_detector.py` 的 ROI 限制在实际平台内。
+1. `SteelBallDetector.detect(frame)` 已接入 steel236 模型：输入为 640×480 RGBP888，返回 `(球心x像素, 球心y像素, 置信度0到100)`，没有球返回 `None`。先验证本平台的识别效果，并将 `steel_ball_detector.py` 的 ROI 限制在实际平台内。
 2. 填写 `X_ZERO_PX` 和 `MM_PER_PIXEL`，使 `x_mm = (x_px - X_ZERO_PX) * MM_PER_PIXEL`。例如实测两点在图像上的距离为 Δpx、平台上的实际距离为 Δmm，则比例的绝对值为 Δmm/Δpx，符号按主控的正方向确定。示例公式不是默认标定值。
 
 首次检测/丢球后重新检测时，速度从 0 开始估计；低置信度、越界、非有限数、过期的连续采样或超出协议数值范围都会发送 `LOST`。
