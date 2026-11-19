@@ -102,6 +102,105 @@ bool board_step_pulse(bool forward)
     return (TIM1->SR & TIM_SR_UIF) != 0u;
 }
 
+#define IMU_CS (1u << 0)
+#define IMU_WHO_AM_I 0x72u
+#define IMU_ID 0xE9u
+#define IMU_INT1_STATUS 0x19u
+#define IMU_DATA_READY (1u << 2)
+static bool imu_big_endian;
+
+static bool spi_wait(uint32_t mask, bool set)
+{
+    const uint32_t started = board_millis();
+    while (((SPI2->SR & mask) != 0u) != set) {
+        if ((uint32_t)(board_millis() - started) >= 2u) { return false; }
+    }
+    return true;
+}
+
+static bool spi_byte(uint8_t out, uint8_t *in)
+{
+    volatile uint8_t *const data = (volatile uint8_t *)&SPI2->DR;
+    if (!spi_wait(SPI_SR_TXE, true)) { return false; }
+    *data = out;
+    if (!spi_wait(SPI_SR_RXNE, true)) { return false; }
+    *in = *data;
+    return true;
+}
+
+static bool imu_transfer(uint8_t address, uint8_t *data, size_t count, bool read)
+{
+    uint8_t discarded;
+    GPIOB->BSRR = IMU_CS << 16;
+    bool ok = spi_byte(read ? (uint8_t)(address | 0x80u) : address, &discarded);
+    for (size_t i = 0; ok && i < count; ++i) {
+        ok = read ? spi_byte(0, data + i) : spi_byte(data[i], &discarded);
+    }
+    const bool idle = spi_wait(SPI_SR_BSY, false);
+    GPIOB->BSRR = IMU_CS;
+    return ok && idle;
+}
+
+static bool imu_write(uint8_t address, uint8_t value)
+{
+    return imu_transfer(address, &value, 1, false);
+}
+
+static void delay_ms(uint32_t duration)
+{
+    const uint32_t started = board_millis();
+    while ((uint32_t)(board_millis() - started) <= duration) { __WFI(); }
+}
+
+bool board_imu_init(void)
+{
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOBEN;
+    RCC->APB1ENR |= RCC_APB1ENR_SPI2EN;
+    (void)RCC->APB1ENR;
+    GPIOB->BSRR = IMU_CS;
+    GPIOB->OTYPER &= ~(IMU_CS | (7u << 13));
+    GPIOB->AFR[1] = (GPIOB->AFR[1] & ~(0xFFFu << 20)) | (0x555u << 20);
+    GPIOB->MODER = (GPIOB->MODER & ~((0x3Fu << 26) | 3u)) | (0x2Au << 26) | 1u;
+    SPI2->CR1 = SPI_CR1_MSTR | SPI_CR1_SSM | SPI_CR1_SSI | SPI_CR1_BR_1 | SPI_CR1_BR_0;
+    SPI2->CR1 |= SPI_CR1_SPE;  /* Mode 0, 1 MHz, four wires. */
+
+    delay_ms(10);
+    uint8_t value;
+    if (!imu_transfer(IMU_WHO_AM_I, &value, 1, true) || value != IMU_ID
+            || !imu_write(0x7Fu, 0x02u)) { return false; }
+    delay_ms(2);
+    if (!imu_transfer(IMU_INT1_STATUS, &value, 1, true) || !(value & 0x80u)) {
+        return false;
+    }
+    /* Read indirect SREG_CTRL (0xA267) to honor the chip's data byte order. */
+    uint8_t indirect_address[] = {0xA2u, 0x67u};
+    if (!imu_transfer(0x7Cu, indirect_address, sizeof(indirect_address), false)) {
+        return false;
+    }
+    delay_ms(1);
+    if (!imu_transfer(0x7Eu, &value, 1, true)) { return false; }
+    imu_big_endian = (value & 2u) != 0u;
+    return imu_write(0x16u, IMU_DATA_READY)
+        && imu_write(0x1Bu, 0x49u)  /* ±2 g, 100 Hz. */
+        && imu_write(0x10u, 0x03u); /* Low-noise accelerometer. */
+}
+
+int board_imu_read(int16_t xyz[3])
+{
+    uint8_t value;
+    if (!imu_transfer(IMU_WHO_AM_I, &value, 1, true) || value != IMU_ID
+            || !imu_transfer(IMU_INT1_STATUS, &value, 1, true)) { return -1; }
+    if (!(value & IMU_DATA_READY)) { return 0; }
+    uint8_t data[6];
+    if (!imu_transfer(0x00u, data, sizeof(data), true)) { return -1; }
+    const unsigned upper = imu_big_endian ? 0u : 1u;
+    for (unsigned i = 0; i < 3u; ++i) {
+        xyz[i] = (int16_t)((uint16_t)data[2u * i + upper] << 8
+                           | data[2u * i + (1u - upper)]);
+    }
+    return 1;
+}
+
 void SysTick_Handler(void)
 {
     ++ticks_ms;

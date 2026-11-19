@@ -96,7 +96,8 @@ def main():
     cpu.reg_write(UC_ARM_REG_SP, stack)
     cpu.reg_write(UC_ARM_REG_XPSR, 0x01000000)
     cpu.hook_add(UC_HOOK_INTR, lambda emulator, interrupt, user: emulator.emu_stop())
-    cpu.emu_start(entry, 0, count=3000000)
+    cpu.mem_write(0xE000ED88, struct.pack("<I", 0x00F00000))
+    cpu.emu_start(entry, 0, count=35000000)
     failures, checks, done = struct.unpack("<III", cpu.mem_read(0x2001E000, 12))
     assert done == 0xF4072300, "C test did not finish"
     assert failures == 0, f"C test failure bitmask: {failures:#x}"
@@ -120,6 +121,7 @@ def main():
     print(f"PASS: {checks} C checks; real K230 packets -> C parser -> real K230 decoder")
     print("PASS: bad CRC, noise, truncated frames, key limits, tick wrap and link timeout")
     print("PASS: jog direction, one pulse per valid command, count and pulse-fault handling")
+    print("PASS: full upward sweep, gravity leveling, return, travel limits, stall, IMU loss and stop")
 
 
 if __name__ == "__main__":

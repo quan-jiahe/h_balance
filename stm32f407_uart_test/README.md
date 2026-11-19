@@ -1,5 +1,31 @@
 # STM32F407VET6 ↔ 亚博 K230 通讯与单脉冲点动
 
+## 开机自检和自动找平
+
+找平版使用 `Firmware/F407_K230_Startup_Level.hex`，也可以打开下文的 Keil 工程重新编译并 Load。K230 已部署的界面能显示新状态，更新 `k230/touch_ui.py` 后还会在扫描和回平时显示停止提示。现有主程序、串口帧格式和 YOLO 模型继续使用。
+
+| 接线 | F407 |
+| --- | --- |
+| ICM-45686 SCLK / MISO / MOSI | PB13 / PB14 / PB15（SPI2） |
+| ICM-45686 CS / INT1 | PB0（低有效）/ PB1（本版通过 SPI 查询数据就绪） |
+| STEP / DIR | PE9 / PE7（已验证正向脉冲抬升电机侧） |
+
+### 上电操作
+
+1. 第一次试机先取出钢珠。每次上电前手动把连杆放到底板，再给整机上电。这个位置是脉冲计数零点。IMU 能拒绝接近水平的起始姿态，触底仍由实际摆放保证。
+2. `HOME: CHECK LOW` 表示先静置，再取 40 组稳定的三轴加速度数据。每轴去除最大和最小样本后计算重力方向。`HOME: SWEEP UP` 表示开始正向扫描，主段每 24 步停稳测角，STEP 间隔 4 ms。实测机械上界是 650 个脉冲，程序扫描到 640 步，预留 10 步。
+3. ICM 的 Z 轴沿钢珠运动方向，固件用三轴加速度的重力投影确定水平并记录过零步数。
+4. `HOME: RETURN LEVEL` 表示从上限快速反向回到水平附近，再用较长的滤波窗口测角并单步微调。连续三组稳定读数在 ±0.10° 内后显示 `HOME: READY`，保持位置等待指令。
+5. 自动运行期间 K230 **返回**可以中止。待命后 **前进/后退** 每次有效点击走一步并切入 `HOME: MANUAL`，仍受 0–640 步范围限制。
+
+`HOME: FAULT` 时停止发 STEP。右侧下一行显示原因，常见有 `IMU SPI` / `IMU DATA`、`PLACE AT LOW`、`NO PROGRESS`、`NO LEVEL IN RANGE` 或 `LEVEL TIMEOUT`。排查后回到底板再重启。水平精度取决于 Z 轴和管道的对齐以及传感器零偏，首次试机可用水平尺独立复核。每次上电自检所用的水平步数只保存在 RAM。
+
+加速滤波版通过 Keil 编译、42 项 Cortex-M 模拟检查及 13 项 K230 Python 检查。HEX 校验和、向量和 Flash 地址范围已复核。2026-11-18 Keil Load 再次报 `Target DLL has been cancelled`，本机 `EnableFlashSeq` 已关闭，板上读回仍为前一版。改用 STM32CubeProgrammer 的 100 kHz SWD 烧录，工具校验通过，两次独立读回也都与 10,288 字节的新版 HEX 一致。实机运动与找平精度待验证。
+
+若换电脑后 Keil Load 报 `Target DLL has been cancelled`，留意前面的弹窗。旧版下载时实机复现的具体报错为 `Connection refused due to device mismatch`，CubeProgrammer 读到芯片 ID 为 `0x413`、512 KB Flash。修复设置为 **Options for Target → Debug → ST-Link Settings → Pack**，取消 **Debug Description → Enable**。本机对应 `.uvoptx` 的 `EnableFlashSeq` 为 `0`。在 **Flash Download** 使用 `STM32F4xx 512kB Flash`，选 **Erase Sectors、Program、Verify**。在 **Utilities** 选 **Use Target Driver for Flash Programming** 和 **Use Debug Driver**。设置后直接点 **Load**。
+
+以下为独立点动测试固件的接线与操作记录。
+
 这是完整源码的独立 Keil MDK 工程，用于测试双向串口与 X42S 单脉冲点动。仓库根目录的 MSPM0 工程负责原有平衡控制。
 
 ## 接线
@@ -89,6 +115,6 @@ py -B Tests/run_protocol_tests.py --keil "你的Keil路径\UV4\UV4.exe"
 
 2026-11-18 实机部署记录
 
-- Keil 编译成功，直接点击 Load 时出现 `Target DLL has been cancelled`。重插 ST-Link 后，通过 STM32CubeProgrammer 将点动 HEX 写入 Flash 第 0 扇区，复位后读回的 4424 字节全部匹配。Keil 下载路径仍待排查。
+- 点动版首次 Keil Load 报 `Target DLL has been cancelled`。当时通过 STM32CubeProgrammer 写入 Flash 第 0 扇区，复位后读回的 4424 字节全部匹配。Keil 下载修复见本文开头。
 - K230 的 `main.py`、`touch_ui.py` 和 `balance_ui_20.fnt` 已写入 SD 卡，读回 SHA-256 均匹配。原采集脚本已备份，原钢球模型校验一致。写入后 USB 调试口掉线，点动版开机画面和 F407 步数回包尚未确认。
 - 现场还需核对 PE9 波形、电机方向和两端净步数。

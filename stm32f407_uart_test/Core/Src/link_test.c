@@ -59,6 +59,7 @@ uint8_t link_test_feed(LinkTest *link, uint8_t byte, uint32_t now_ms)
             link->last_status = data[15];
         } else if (data[4] >= 0x40u && data[4] <= LINK_JOG_BACK) {
             const uint8_t key = data[4];
+            link->key_event = key;
             if (key < 0x44u) {
                 link->last_key = key;
             }
@@ -150,6 +151,9 @@ void link_test_menu(const LinkTest *link, uint32_t now_ms,
     snprintf((char *)packet + 49, 22, "KEY:%s V:%ld", key, (long)link->value);
     snprintf((char *)packet + 71, 22, "STEP:%+ld%s",
              (long)link->steps, link->step_fault ? " ERR" : "");
+    if (link->startup_rows[0][0]) {
+        memcpy(packet + 27, link->startup_rows, sizeof(link->startup_rows));
+    }
     const uint16_t crc = link_crc16(packet + 2, LINK_MENU_SIZE - 4u);
     packet[93] = (uint8_t)crc;
     packet[94] = (uint8_t)(crc >> 8);

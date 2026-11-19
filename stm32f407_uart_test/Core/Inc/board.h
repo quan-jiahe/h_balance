@@ -11,5 +11,8 @@ bool board_uart_read(uint8_t *byte);
 void board_uart_write(const uint8_t *data, size_t length);
 uint32_t board_uart_errors(void);
 bool board_step_pulse(bool forward);
+bool board_imu_init(void);
+/* Returns 1 for fresh data, 0 while waiting, and -1 on a bus/identity error. */
+int board_imu_read(int16_t xyz[3]);
 
 #endif

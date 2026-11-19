@@ -1,5 +1,6 @@
-LR_IROM1 0x08000000 0x00080000 {
-  ER_IROM1 0x08000000 0x00080000 {
+; Leave sector 7 outside this image for compatibility with older firmware.
+LR_IROM1 0x08000000 0x00060000 {
+  ER_IROM1 0x08000000 0x00060000 {
     *.o (RESET, +First)
     *(InRoot$$Sections)
     .ANY (+RO)

@@ -278,6 +278,8 @@ if __name__ == "__main__":
         import sys
         try:
             with open("/sdcard/balance_error.log", "w") as log:
+                log.write("%s: %s\n" % (type(error).__name__, error))
+                log.flush()
                 sys.print_exception(error, log)
         except OSError:
             pass

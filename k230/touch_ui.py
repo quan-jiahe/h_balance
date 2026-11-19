@@ -81,10 +81,12 @@ class TouchMenu:
             label.set_size(156, 44)
             self.lines.append(label)
 
-        help_label = lv.label(panel)
-        help_label.set_pos(0, 184)
-        help_label.set_width(156)
-        help_label.set_text("上移：测试值+1\n下移：测试值-1\n确认：启停识别\n返回：清测试值\n前进/后退：1步")
+        self.help_label = lv.label(panel)
+        self.help_label.set_pos(0, 184)
+        self.help_label.set_width(156)
+        self.legacy_help = "上移：测试值+1\n下移：测试值-1\n确认：启停识别\n返回：清测试值\n前进/后退：1步"
+        self.last_help = self.legacy_help
+        self.help_label.set_text(self.last_help)
 
         self.jog_buttons = []
         for index, text in enumerate(("上移 +1", "下移 -1", "确认", "返回", "前进", "后退")):
@@ -160,9 +162,29 @@ class TouchMenu:
             step_status = lines[3][5:]
             jog_ready = connected and not step_status.endswith(" ERR")
             lines = list(lines)
+            startup = lines[1].startswith("CAL:") or lines[1].startswith("HOME:")
+            if startup and step_status.endswith(" ERR"):
+                step_status = step_status[:-4]
             lines[3] = "步数 " + (step_status if connected else "--")
+            if startup:
+                help_text = {
+                    "CAL: SET LOW": "上移：SAVE LOW",
+                    "CAL: SET LEVEL": "下移：SAVE LEVEL",
+                    "HOME: CHECK LOW": "返回：STOP",
+                    "HOME: SWEEP UP": "返回：STOP",
+                    "HOME: RETURN LEVEL": "返回：STOP",
+                    "HOME: LEVELING": "返回：STOP",
+                    "HOME: READY": "确认：启停识别\n前进/后退：1步",
+                    "HOME: MANUAL": "确认：启停识别\n前进/后退：1步",
+                }.get(lines[1], "")
+            else:
+                help_text = self.legacy_help
         else:
             jog_ready = False
+            help_text = self.legacy_help
+        if help_text != self.last_help:
+            self.help_label.set_text(help_text)
+            self.last_help = help_text
         if jog_ready != self.jog_ready:
             for button in self.jog_buttons:
                 button.set_style_bg_color(lv.color_hex(0x166453 if jog_ready else 0x3D4655), 0)

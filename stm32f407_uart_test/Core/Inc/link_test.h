@@ -20,6 +20,7 @@ typedef struct {
     uint8_t menu_due;
     uint8_t seen_rx;
     uint8_t step_fault;
+    uint8_t key_event;
     uint32_t last_byte_ms;
     uint32_t last_rx_ms;
     uint32_t packets;
@@ -27,6 +28,7 @@ typedef struct {
     uint32_t crc_errors;
     int32_t value;
     int32_t steps;
+    char startup_rows[3][22];
 } LinkTest;
 
 void link_test_init(LinkTest *link);

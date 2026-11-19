@@ -34,6 +34,8 @@ Listings/
 *.uvguix.*
 *.uvoptx
 *.build_log.htm
+/stm32f407_uart_test/MDK-ARM/DebugConfig/
+/stm32f407_uart_test/MDK-ARM/RTE/
 !stm32f407_uart_test/Firmware/*.hex
 
 # Download the upstream model with tools/download_steel_ball_model.py.

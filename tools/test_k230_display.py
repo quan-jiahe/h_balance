@@ -127,6 +127,34 @@ class DisplayTests(unittest.TestCase):
         forward(None)
         self.assertEqual(self.sent, [4, 5])
 
+    def test_startup_calibration_and_jog_lock(self):
+        class FirmwareString(str):
+            def startswith(self, prefix):
+                if isinstance(prefix, tuple):
+                    raise TypeError("tuple prefix is unsupported")
+                return super().startswith(prefix)
+
+        frame = Mock()
+        frame.bytearray.return_value = bytes(448 * 336 * 2)
+        up = self.buttons[0].add_event.call_args.args[0]
+        forward = self.buttons[-2].add_event.call_args.args[0]
+        self.ui.update(["RX:OK", FirmwareString("CAL: SET LOW"), "UP: SAVE LOW", "STEP:0/640 ERR"],
+                       "", True, frame, None)
+        self.ui.help_label.set_text.assert_any_call("上移：SAVE LOW")
+        self.ui.lines[3].set_text.assert_called_with("步数 0/640")
+        forward(None)
+        up(None)
+        self.assertEqual(self.sent, [0])
+        self.ui.update(["RX:OK", FirmwareString("HOME: SWEEP UP"), "ANGLE:+1.5 deg", "STEP:320/640 ERR"],
+                       "", True, frame, None)
+        self.ui.help_label.set_text.assert_any_call("返回：STOP")
+        forward(None)
+        self.assertEqual(self.sent, [0])
+        self.ui.update(["RX:OK", FirmwareString("HOME: READY"), "ANGLE:-0.05 deg", "STEP:240/640"],
+                       "", True, frame, None)
+        forward(None)
+        self.assertEqual(self.sent, [0, 4])
+
     def test_preview_pixels_overlay_scaling_and_no_ball_refresh(self):
         frame = Mock()
         frame.bytearray.return_value = bytes([0x12]) * (448 * 336 * 2)

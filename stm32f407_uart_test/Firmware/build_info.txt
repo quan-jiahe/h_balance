@@ -17,3 +17,13 @@ Checks: 25 Cortex-M protocol/jog checks; 12 Python checks
 Hardware flash: STM32CubeProgrammer verified all 4424 bytes after reset on 2026-11-18
 STEP waveform and motor motion: pending
 SHA256: 85db47e9916f7813eb020fa2dc17ccd41218112836512c3ab1e8da5efc9a0297
+
+Firmware: F407_K230_Startup_Level.hex
+Target: STM32F407VET6, Keil MDK 5.43 / Arm Compiler for Embedded 6.24
+Build: 0 errors, 0 warnings; Code=9716 RO-data=564 RW-data=8 ZI-data=1416 bytes
+HEX: checksums and vectors verified; 10288 bytes at 0x08000000..0x0800282F
+Checks: 42 Cortex-M protocol and startup checks; 13 K230 Python checks
+Plant simulation: startup motion rejection, noisy gravity filter, full sweep to 640, and verified return to level
+Physical deployment: STM32CubeProgrammer at SWD 100 kHz, verify passed.
+Two independent SWD reads matched all 10288 firmware bytes. Powered motion and leveling accuracy: pending.
+SHA256: 2a23ca7c5b4a5e78af846a796e03f528a288eadd84893342135c1fa527ef33df
