@@ -38,8 +38,9 @@ SHA256: 2aac836cbc05fa96a2234ffaf8c77401ebb5876319021fcc8fa00928369eb8a3
 
 Firmware: F407_K230_Center_Balance.hex
 Target: STM32F407VET6, Keil MDK / Arm Compiler 6.7 with a local CMSIS compatibility option
-Build: 0 errors, 0 warnings; Code=11892 RO-data=724 RW-data=8 ZI-data=1544 bytes
-HEX: 12624 bytes at 0x08000000..0x0800314F; checksums and Reset/SysTick/USART3 vectors verified
-Checks: 107 Cortex-M and 16 Python checks, including startup travel 0-650-310, standstill reference availability, vision handoff, automatic reacquisition and manual STOP
+Build: 0 errors, 0 warnings; Code=11936 RO-data=724 RW-data=8 ZI-data=1544 bytes
+HEX: 12672 bytes at 0x08000000..0x0800317F; checksums and Reset/SysTick/USART3 vectors verified
+Checks: 107 Cortex-M checks, including startup travel 0-650-310, vision handoff, automatic reacquisition and manual STOP
+OLED: SH1106 default, 100 ms power-up delay and 250 ms probe retry
 Physical deployment: this revision has not been flashed. OLED controller, display and installed IMU readings need hardware verification.
-SHA256: d97099395224633d92d4fcd5ff02c49e5e2de73bd48f676e89efb299aa5ba7cf
+SHA256: 1e19162a0f58a7af8f71694af5dd5788d48eecdd24277a1201c8c458615fd635

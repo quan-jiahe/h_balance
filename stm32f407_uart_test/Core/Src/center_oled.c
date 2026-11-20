@@ -10,7 +10,14 @@
 #define SCL (1u << 8)
 #define SDA (1u << 9)
 enum { WIDTH = 128, PAGES = 8, CHUNK = 8, ANGLE_PAGE = 3,
+       OLED_POWER_UP_MS = 100, OLED_RETRY_MS = 250,
        SETTLE_MS = 250, IMU_PERIOD_MS = 25, ZERO_SAMPLES = 8 };
+
+#if defined(F407_OLED_SSD1306) || defined(F407_OLED_SSD1309)
+enum { COLUMN_OFFSET = 0 };
+#else
+enum { COLUMN_OFFSET = 2 };  /* Visible 128 columns of SH1106's 132-column RAM. */
+#endif
 
 static uint8_t address;
 static bool imu_ready, zeroed, at_level;
@@ -73,11 +80,6 @@ static bool oled_write(uint8_t control, const uint8_t *data, unsigned count)
 
 void center_oled_init(void)
 {
-    static const uint8_t setup[] = {
-        0xFD, 0x12, 0xAE, 0xD5, 0x80, 0xA8, 0x3F, 0xD3, 0x00, 0x40,
-        0x20, 0x02, 0xA1, 0xC8, 0xDA, 0x12, 0x81, 0x7F, 0xD9, 0x22,
-        0xDB, 0x20, 0x2E, 0xA4, 0xA6, 0xAF
-    };
     CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
     DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
     RCC->AHB1ENR |= RCC_AHB1ENR_GPIOBEN;
@@ -86,14 +88,43 @@ void center_oled_init(void)
     GPIOB->BSRR = SCL | SDA;
     GPIOB->PUPDR = (GPIOB->PUPDR & ~(15u << 16)) | (5u << 16);
     GPIOB->MODER = (GPIOB->MODER & ~(15u << 16)) | (5u << 16);
+    next_chunk = board_millis() + OLED_POWER_UP_MS;
+    imu_ready = board_imu_init();
+}
+
+static void probe_display(uint32_t now)
+{
+    static const uint8_t setup[] = {
+#if defined(F407_OLED_SSD1309)
+        0xFD, 0x12,  /* Unlock SSD1309 commands. */
+#endif
+        0xAE, 0xD5, 0x80, 0xA8, 0x3F, 0xD3, 0x00, 0x40,
+#if defined(F407_OLED_SSD1306)
+        0x8D, 0x14, 0x20, 0x02,  /* Internal charge pump and page addressing. */
+#elif defined(F407_OLED_SSD1309)
+        0x20, 0x02,
+#else
+        0xAD, 0x8B,  /* Enable the SH1106 internal DC-DC converter. */
+#endif
+        0xA1, 0xC8, 0xDA, 0x12, 0x81, 0x7F,
+#if defined(F407_OLED_SSD1306)
+        0xD9, 0xF1, 0xDB, 0x40, 0x2E,
+#elif defined(F407_OLED_SSD1309)
+        0xD9, 0x22, 0xDB, 0x20, 0x2E,
+#else
+        0xD9, 0x22, 0xDB, 0x35,
+#endif
+        0xA4, 0xA6, 0xAF
+    };
     address = 0x3Cu;
     if (!oled_write(0, setup, sizeof(setup))) {
         address = 0x3Du;
         if (!oled_write(0, setup, sizeof(setup))) { address = 0; }
     }
     if (address) {
-        imu_ready = board_imu_init();
         clearing = true;
+    } else {
+        next_chunk = now + OLED_RETRY_MS;
     }
 }
 
@@ -177,7 +208,10 @@ static void make_frame(uint32_t now)
 void center_oled_tick(const LinkTest *link, uint32_t now)
 {
     static const uint8_t blank[CHUNK] = {0};
-    if (!address) { return; }
+    if (!address) {
+        if ((int32_t)(now - next_chunk) >= 0) { probe_display(now); }
+        return;
+    }
     update_angle(link, now);
     if ((int32_t)(now - next_chunk) < 0) { return; }
     if (!clearing && column == 0) {
@@ -185,8 +219,10 @@ void center_oled_tick(const LinkTest *link, uint32_t now)
         frame_start = now;
         make_frame(now);
     }
+    const unsigned ram_column = column + COLUMN_OFFSET;
     const uint8_t command[] = {
-        (uint8_t)(0xB0u | page), (uint8_t)(column & 15u), (uint8_t)(0x10u | (column >> 4))
+        (uint8_t)(0xB0u | page), (uint8_t)(ram_column & 15u),
+        (uint8_t)(0x10u | (ram_column >> 4))
     };
     const uint8_t *data = clearing ? blank : angle_line + column;
     next_chunk = now + 8u;
