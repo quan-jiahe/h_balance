@@ -1,17 +1,57 @@
 # STM32F407VET6 ↔ 亚博 K230 通讯与单脉冲点动
 
-## 钢球居中联调固件
+## 毫米位置/速度自动稳球版（2026-11-20）
 
-`Firmware/F407_K230_Center_Balance.hex` 使用现有 STEP/DIR 接线和 K230 识别程序。用 Keil MDK 5 打开 [F407_K230_UART.uvprojx](MDK-ARM/F407_K230_UART.uvprojx)，在目标下拉框选择 **F407_K230_Center_Balance** 并执行 **Rebuild**。工程配置使用 Arm Compiler 6.24。该目标已设置 `F407_CENTER_BALANCE`，输出到 `MDK-ARM/Objects/CenterBalance/F407_K230_Center_Balance.hex`。
+工作目录统一为 `C:\Users\LENOVO\Desktop\ultra\h_balance`。打开 `MDK-ARM/F407_K230_UART.uvprojx`，选择 **F407_K230_Center_Balance** Target。固件为 `Firmware/F407_K230_Center_Balance.hex`，复制 HEX 时需同时保留对应编译版本的 map 供调参使用。
 
-- 电机 STEP 接 PE9、DIR 接 PE7。K230 IO9 → F407 PD9，F407 PD8 → K230 IO10，两板共地，115200 / 8N1。闭环调试需要串口双向连线。
-- K230 用识别版 `k230/main.py`，配套文件见 [K230 README](../k230/README.md)。先保留拍照脚本和已验证的模型文件，再用 CanMV IDE 运行识别版。居中点用 640×480 原始推理画面的 `CENTER_BALANCE_X_PX`，默认 320。把球放到轨道物理中心，读屏幕上的实测 X，必要时用该值修改配置。
-- 复位前先取出球，把机构放到机械下端。上电计步为 0，固件自动走 0 → 650 → 310，回程终点由 `STARTUP_LEVEL_STEPS` 设置。上行显示 `BAL: STARTUP UP`，回程显示 `BAL: RETURN 310`。期间可按“返回”停步，随后可在 `BAL: SET LEVEL` 手动调平。水平位置就绪后，若正向脉冲会让球向画面右侧滚，点“上移”选 `DIR:+1`，若会向左滚，点“下移”选 `DIR:-1`。
-- OLED 按 SSD1309、128×64、I²C 模式配置，SCK 接 PB8，SDA 接 PB9，和 F407 共地，I²C 信号上拉到 3.3 V。自检回到停靠点后等 250 ms，再取 8 个有效 IMU 样本建立当次零点。OLED 显示相对该姿态的倾角，单位 `DEG`，读数无效时显示 `IMU ERR`。倾角显示可以独立于 K230 工作，零点只保存在 RAM。
-- 放球到中心附近，看到 `BAL: READY` 后点“确认”启动。可以往左右轻推一点，检查倾斜方向、回中及是否振荡。自动纠偏的目标受 0–650 步约束，每个有效观测最多改变目标 8 步。`PULSE_INTERVAL_MS` 和控制器参数在 `Core/Src/center_balance.c`。
-- 已启动居中后，丢球或 180 ms 没有新有效观测时显示 `BAL: HOLD`，暂停发 STEP。超时后第二行显示 `WAIT BALL AUTO`。收到新的有效观测会重建速度估计并自动恢复。“返回”或运行中再次点“确认”会解除居中启动，后续观测不会使电机自动恢复。暂停和停止都保持当前电机位置。每次复位前都要先把机构放回机械下端。
+- 输入是 K230 的 18 字节版本 1 毫米观测：x_mm、vx_mm_s、有符号 int16、小端、CRC16。速度直接使用 K230 估计值，不在 F407 再差分或叠加滤波。像素版本 2 不参与控制，避免单位混用。
+- DIR 的逻辑方向在固件固定为 -1，按毫米坐标左正右负约定使用。方向选择菜单和 DIR 文本已移除。此值按用户指定写入固件，并非本次实测电机方向。
+- 保留原上电行程检查 0→650→310，需先手动置于机械下端并取出球。310 作为该次上电的显示/IMU 参考；进入稳球后不作为电机回位目标。20 s 未完成检查会进入故障。
+- 自检完成自动进入 **S1 WAIT BALL**。收到新的有效球观测后自动进入 **S2 ZERO**，控制目标为管道 0 mm。
+- |x|≤2 mm 且 |v|≤4 mm/s 时进入 **S3 HOLD ZERO**，锁存电机实际计步位置并停止发脉冲。偏差达到 4 mm 或速度达到 10 mm/s 时恢复纠偏。不会为了稳定状态把电机拉回310步。
+- 丢球或180 ms无新观测时锁住当前步数，回到 S1，重新检出后从当前姿态继续。重复时间戳不能刷新看门狗。
+- **返回**或运行中**确认**进入 **S4 STOPPED**，新球观测不会自行重启；确认可重新允许自动检测。**S5 FAULT** 表示脉冲异常、上电超时或球心超过 ±100 mm，需排查后复位。
+- 保留 0～650 步硬行程限制、每帧目标变化最多8步、8 ms脉冲间隔。|x|≥90 mm加强朝中心制动。原位置/速度耦合、速度包络、提前制动、中心积分保留，参数已换成毫米单位。KFF/KFF2 补偿入口保留，默认0。
+- OLED继续显示相对上电参考姿态的IMU角度，仅用于观察，没有用其自动回水平。
 
-K230 居中观测使用 A5 5A 封装的版本 2 帧，位置是相对目标的有符号像素偏差，速度由 F407 根据观测时间估计。将 `CENTER_BALANCE_X_PX` 设为 `None` 可使用原毫米协议。采图脚本与拍照联调 HEX 可用于原先的采图流程。
+### 编译和烧录
+
+在 VSCode 的 PowerShell 中，从仓库根目录运行：
+
+```powershell
+.\tools\build_center.ps1
+& "D:\STM32CubeCLT_1.21.0\STM32CubeProgrammer\bin\STM32_Programmer_CLI.exe" -c port=SWD freq=100 -w ".\stm32f407_uart_test\Firmware\F407_K230_Center_Balance.hex" -v -rst
+```
+
+也可执行 `.\stm32f407_uart_test\flash_center.ps1`。烧录命令会复位并立即开始原上电行程，开始前把机构放到底端并取出球。
+
+### ST-Link 在线调参
+
+调参程序仅使用 Python 标准库、现有 CubeProgrammer 与 ST-Link，不需要额外串口。先烧录本版，再在仓库根目录运行：
+
+```powershell
+py .\tools\tune_balance.py --show
+py .\tools\tune_balance.py --set kp=0.20 kv=0.80
+```
+
+使用 HOTPLUG 读取 RAM，不复位。读取当前 map 的参数符号，并先核对固件标记及版本，再写入单个32位浮点参数，最后读回验证。错误固件标记会拒绝写入。默认 map 是 `MDK-ARM/Listings/CenterBalance/F407_K230_Center_Balance.map`，需与烧录的 HEX 同次编译。多个 ST-Link 时应只保留目标这一个。
+
+| 参数 | 默认值 | 含义与调整 |
+| --- | --- | --- |
+| kp | 0.25 | 位置增益，单位步/mm，过冲时适当减小 |
+| kv | 0.70 | 速度误差增益，单位步/(mm/s)，增加会加强阻尼 |
+| ki | 0.875 | 中心小范围积分增益，慢振荡时减小或先设0 |
+| gain | 1.50 | 整体输出倍率 |
+| brake | 1.60 | 提前制动时的速度增益倍率 |
+| max_speed | 72 | 目标球速上限 mm/s |
+| accel | 88 | 制动距离规划加速度 mm/s² |
+| ref_accel | 120 | 目标速度上升斜率 mm/s² |
+| kff / kff2 | 0 / 0 | 线性/平方速度补偿 |
+| max_offset | 150 | 单次纠偏相对锁存姿态的最大脉冲偏移 |
+
+在线修改只保存在 RAM，复位恢复默认。确定合适参数后修改 `Core/Src/center_balance.c` 的 `g_balance_tuning` 初始化值，重新编译、烧录，使其永久生效。方向 -1 是编译常量，在线工具不能修改。
+
+本版 Keil AC6.24编译0错误0警告，147项Cortex-M检查、23项Python检查通过，包含毫米帧/速度、自动启动、固定方向、非310位置稳定保持、丢球、停止和两端限位。调参工具用模拟CLI验证了签名检查、地址和写后校验。本次尚未实际烧录，在线SWD调参及实机稳球需烧录后验证。
 
 ## 拍照联调用往返固件
 

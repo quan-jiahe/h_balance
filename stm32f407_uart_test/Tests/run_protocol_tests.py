@@ -53,11 +53,14 @@ def main():
         "jog_back": k230.build_key_frame(k230.TOUCH_KEYS[5]),
         "valid": k230.build_frame(0x1234, 0xDEADBEEF, (123, -45, 87, k230.RAW_VALID)),
         "lost": k230.build_frame(2, 200, k230.LOST_MEASUREMENT),
-        "center_left": k230.build_frame(3, 300, k230.center_measurement((200, 250, 90), 320), center=True),
-        "center_right": k230.build_frame(4, 400, k230.center_measurement((440, 250, 90), 320), center=True),
-        "center_lost": k230.build_frame(5, 500, k230.LOST_MEASUREMENT, center=True),
-        "center_near_left": k230.build_frame(6, 600, k230.center_measurement((318, 250, 90), 320), center=True),
-        "center_near_right": k230.build_frame(7, 700, k230.center_measurement((322, 250, 90), 320), center=True),
+        "center_left": k230.build_frame(3, 300, (-30, 0, 90, 1)),
+        "center_right": k230.build_frame(4, 400, (30, 0, 90, 1)),
+        "center_lost": k230.build_frame(5, 500, k230.LOST_MEASUREMENT),
+        "center_near_left": k230.build_frame(6, 600, (-1, 0, 90, 1)),
+        "center_near_right": k230.build_frame(7, 700, (1, 0, 90, 1)),
+        "center_fast": k230.build_frame(8, 800, (0, 40, 90, 1)),
+        "center_edge": k230.build_frame(9, 900, (101, 0, 90, 1)),
+        "pixel_only": k230.build_frame(10, 1000, (30, 0, 90, 1), center=True),
     }
     (build / "fixtures.h").write_text("\n".join(
         "static const uint8_t fixture_%s[] = {%s};" %
@@ -133,13 +136,13 @@ def main():
     decoder.feed(bytes(cpu.mem_read(0x2001E300, 95)))
     assert decoder.menu_lines[1:] == ["MOTOR:STOP", "RANGE:0-650", "STEP:+0"]
     decoder.feed(bytes(cpu.mem_read(0x2001E380, 95)))
-    assert decoder.menu_lines[1:3] == ["BAL: ACTIVE", "DX:+120px DIR:+1"]
+    assert decoder.menu_lines[1:3] == ["BAL: S2 ZERO", "X:+30 V:+0 mm/s"]
     print(f"PASS: {checks} C checks; real K230 packets -> C parser -> real K230 decoder")
     print("PASS: bad CRC, noise, truncated frames, key limits, tick wrap and link timeout")
     print("PASS: jog direction, one pulse per valid command, count and pulse-fault handling")
     print("PASS: full upward sweep, gravity leveling, return, travel limits, stall, IMU loss and stop")
     print("PASS: two 0-650 pulse cycles with IMU offline, variable speed, no dwell, stop and pulse fault")
-    print("PASS: center arming, pixel protocol, sign, travel limit, STOP, vision loss and timeout")
+    print("PASS: mm auto-centering, supplied velocity, fixed sign, latched position, STOP, loss and timeout")
     print("PASS: startup travel 0 -> 650 -> configured level, vision handoff and cancel")
 
 

@@ -55,15 +55,22 @@ uint8_t link_test_feed(LinkTest *link, uint8_t byte, uint32_t now_ms)
             discard_byte(link);
             continue;
         }
-        if (center_frame) {
-            const uint16_t px = (uint16_t)(data[10] | ((uint16_t)data[11] << 8));
-            const int32_t error = px <= INT16_MAX ? (int32_t)px : (int32_t)px - 65536;
+        if (!center_frame && size == 18u) {
+            const int16_t position = (int16_t)((uint16_t)data[10] | ((uint16_t)data[11] << 8));
+            const int16_t velocity = (int16_t)((uint16_t)data[12] | ((uint16_t)data[13] << 8));
             const uint32_t sample_ms = (uint32_t)data[6] | ((uint32_t)data[7] << 8)
                                      | ((uint32_t)data[8] << 16) | ((uint32_t)data[9] << 24);
             const bool valid = data[15] == 1u && data[14] >= 50u && data[14] <= 100u
-                               && error > -640 && error < 640;
-            if (link->center_observations == 0 || sample_ms != link->center_sample_ms) {
-                link->center_error_px = (int16_t)error;
+                               && position >= -1000 && position <= 1000
+                               && velocity >= -2000 && velocity <= 2000;
+            const uint32_t elapsed = sample_ms - link->center_sample_ms;
+            const bool fresh = link->center_observations == 0
+                               || (elapsed > 0 && elapsed < 0x80000000u)
+                               || (sample_ms != link->center_sample_ms
+                                   && now_ms - link->center_rx_ms > 1000u);
+            if (fresh) {
+                link->center_error_mm = position;
+                link->center_velocity_mm_s = velocity;
                 link->center_sample_ms = sample_ms;
                 link->center_rx_ms = now_ms;
                 link->center_valid = valid;
@@ -71,9 +78,11 @@ uint8_t link_test_feed(LinkTest *link, uint8_t byte, uint32_t now_ms)
             } else if (!valid) {
                 link->center_valid = false;
             }
-        } else if (size == 18u) {
             ++link->observations;
             link->last_status = data[15];
+        } else if (center_frame) {
+            /* Pixel v2 must never be interpreted as millimetres. */
+            link->center_valid = false;
         } else if (data[4] >= 0x40u && data[4] <= LINK_JOG_BACK) {
             const uint8_t key = data[4];
             link->key_event = key;

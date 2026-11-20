@@ -435,6 +435,11 @@
           <GroupName>Headers</GroupName>
           <Files>
             <File>
+              <FileName>balance_tuning.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Core\Inc\balance_tuning.h</FilePath>
+            </File>
+            <File>
               <FileName>board.h</FileName>
               <FileType>5</FileType>
               <FilePath>..\Core\Inc\board.h</FilePath>
@@ -881,6 +886,11 @@
         <Group>
           <GroupName>Headers</GroupName>
           <Files>
+            <File>
+              <FileName>balance_tuning.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Core\Inc\balance_tuning.h</FilePath>
+            </File>
             <File>
               <FileName>board.h</FileName>
               <FileType>5</FileType>

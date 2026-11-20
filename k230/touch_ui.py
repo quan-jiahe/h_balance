@@ -5,10 +5,12 @@ import lvgl as lv
 import uctypes
 from machine import TOUCH
 from media.display import Display
+from pipe_calibration import PIPE_TICK_X, PIPE_TICK_MM
 
 PREVIEW_WIDTH = 448
 PREVIEW_HEIGHT = 336
 ALIGN_LINE_Y = 150  # Preview Y=0..335, increases downward.
+
 
 
 class TouchMenu:
@@ -136,6 +138,15 @@ class TouchMenu:
     def update(self, lines, observation_status, connected, frame, box):
         frame.draw_line(0, ALIGN_LINE_Y, PREVIEW_WIDTH - 1, ALIGN_LINE_Y,
                         color=(255, 0, 0), thickness=2)
+        for index, x in enumerate(PIPE_TICK_X):
+            x = round(x)
+            value = 10 - index
+            color = (255, 255, 0) if value == 0 else (0, 255, 255)
+            frame.draw_line(x, ALIGN_LINE_Y - 7, x, ALIGN_LINE_Y + 9,
+                            color=color, thickness=1)
+            label = "%+d" % value if value else "0"
+            label_y = ALIGN_LINE_Y - 48 + (index % 2) * 20
+            frame.draw_string_advanced(x - 10, label_y, 16, label, color=color)
         if box is not None:
             x, y, width, height = box
             x1 = max(0, min(PREVIEW_WIDTH - 1, round(x * PREVIEW_WIDTH / 640)))
@@ -172,11 +183,7 @@ class TouchMenu:
             if setting_level:
                 help_text = "UP/DOWN:25\nOK:SAVE LEVEL\nBACK:STOP"
             elif balance_mode:
-                if lines[1] == "BAL: STARTUP UP" or lines[1].startswith("BAL: RETURN "):
-                    help_text = "BACK:STOP"
-                else:
-                    help_text = ("OK/BACK:STOP" if lines[1] in ("BAL: ACTIVE", "BAL: HOLD")
-                                 else "UP:+  DOWN:-\nOK:START")
+                help_text = "OK:RESUME\nBACK:STOP" if lines[1] == "BAL: S4 STOPPED" else "BACK:STOP"
             elif motor_cycle:
                 help_text = "返回：STOP" if lines[1] in ("MOTOR:FWD", "MOTOR:REV") else ""
             elif startup:
@@ -195,6 +202,9 @@ class TouchMenu:
         else:
             jog_ready = False
             help_text = self.legacy_help
+        if lines[1].startswith("T1:"):
+            jog_ready = False
+            help_text = "OK:START\nBACK:STOP" if connected and lines[1] == "T1: WAIT BALL" else "BACK:STOP"
         if help_text != self.last_help:
             self.help_label.set_text(help_text)
             self.last_help = help_text

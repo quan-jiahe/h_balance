@@ -1,3 +1,7 @@
+# 当前联调入口
+
+统一工作目录为 `C:\Users\LENOVO\Desktop\ultra\h_balance`。最新毫米稳球的编译、烧录与在线调参见 [F407说明](stm32f407_uart_test/README.md)。Keil选择 `F407_K230_Center_Balance`。固定DIR=-1，自检后S1自动检测，球稳定后锁住当时电机位置。旧版本说明保留在后面供参考。
+
 # h_balance
 
 钢球平衡系统：亚博带触摸屏 K230 负责视觉接口和触控菜单，通过串口与主控通信。

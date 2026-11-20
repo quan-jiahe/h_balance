@@ -1,10 +1,11 @@
-"""Yahboom K230 steel-ball YOLO11, touch menu and UART; mm calibration pending."""
+"""Steel-ball preview, measured tube scale and UART observations for F407."""
 
 import math
 import struct
 import time
 
 from balance_uart import Commands, START, STOP, crc16
+import pipe_calibration
 
 WIDTH = 640
 HEIGHT = 480
@@ -14,7 +15,7 @@ FRAME_PERIOD_MS = 20
 # Fill these only after measuring the real camera/platform geometry.
 X_ZERO_PX = None
 MM_PER_PIXEL = None  # Signed scale: positive x must agree with the controller.
-CENTER_BALANCE_X_PX = 320  # Measure the physical midpoint in the 640 px camera frame.
+CENTER_BALANCE_X_PX = None  # Default: calibrated mm protocol v1. Pixel mode v2 remains explicit.
 
 RAW_VALID = 0x01
 LOST = 0x20
@@ -42,7 +43,8 @@ def center_measurement(detection, center_px):
     if detection is None or not (0 <= center_px < WIDTH):
         return LOST_MEASUREMENT
     x, y, confidence = detection
-    if not (0 <= x < WIDTH and 0 <= y < HEIGHT and 50 <= confidence <= 100):
+    if not (all(math.isfinite(value) for value in (x, y, confidence))
+            and 0 <= x < WIDTH and 0 <= y < HEIGHT and 50 <= confidence <= 100):
         return LOST_MEASUREMENT
     return x - center_px, 0, confidence, RAW_VALID
 
@@ -61,35 +63,44 @@ class BallTracker:
     def reset(self):
         self.last_x = None
         self.velocity = 0.0
+        self.filtered_x = None
 
-    def update(self, detection, elapsed_ms, zero_px, mm_per_pixel):
+    def update(self, detection, elapsed_ms, zero_px=None, mm_per_pixel=None):
         # Detection contract: (center_x_px, center_y_px, confidence_0_to_100).
-        if detection is None or zero_px is None or mm_per_pixel is None:
+        pipe_mode = zero_px is None and mm_per_pixel is None
+        calibrated = pipe_calibration.CALIBRATION_CONFIRMED if pipe_mode else (
+            zero_px is not None and mm_per_pixel is not None)
+        if detection is None or not calibrated:
             self.reset()
             return LOST_MEASUREMENT
         try:
             x_px, y_px, confidence = detection
-            values = (x_px, y_px, confidence, zero_px, mm_per_pixel)
+            values = (x_px, y_px, confidence) if pipe_mode else (x_px, y_px, confidence, zero_px, mm_per_pixel)
             if not all(math.isfinite(value) for value in values):
                 raise ValueError("non-finite detection/calibration")
             if not (0 <= x_px < WIDTH and 0 <= y_px < HEIGHT
-                    and 50 <= confidence <= 100 and 0 <= zero_px < WIDTH
-                    and mm_per_pixel != 0):
+                    and 50 <= confidence <= 100):
                 raise ValueError("invalid detection/calibration")
-            # shortcut: one-axis affine calibration; use a homography for perspective distortion.
-            x_mm = (x_px - zero_px) * mm_per_pixel
+            if not pipe_mode and not (0 <= zero_px < WIDTH and mm_per_pixel != 0):
+                raise ValueError("invalid affine calibration")
+            x_mm = pipe_calibration.pixel_to_mm(x_px) if pipe_mode else (x_px - zero_px) * mm_per_pixel
             velocity = 0.0
             if self.last_x is not None:
                 if not 0 < elapsed_ms <= 500:
                     raise ValueError("invalid/stale sampling interval")
-                raw_velocity = (x_mm - self.last_x) * 1000.0 / elapsed_ms
-                velocity = 0.35 * raw_velocity + 0.65 * self.velocity
+                # Reuse F407bujin position/speed filters, keeping raw position for limits.
+                filtered = self.filtered_x + 0.45 * (x_mm - self.filtered_x)
+                raw_velocity = (filtered - self.filtered_x) * 1000.0 / elapsed_ms
+                velocity = 0.25 * raw_velocity + 0.75 * self.velocity
+            else:
+                filtered = x_mm
             if not (-32768 <= x_mm <= 32767 and -32768 <= velocity <= 32767):
                 raise ValueError("measurement exceeds wire format")
         except (TypeError, ValueError, OverflowError):
             self.reset()
             return LOST_MEASUREMENT
         self.last_x = x_mm
+        self.filtered_x = filtered
         self.velocity = velocity
         return x_mm, velocity, confidence, RAW_VALID
 
@@ -188,9 +199,11 @@ def run(center_x_px=CENTER_BALANCE_X_PX):
             elif center_mode:
                 label = ("X:%.0f / %.0f px C:%d%%" % (detection[0], center_x_px, detection[2])
                          if measurement[3] == RAW_VALID else "NO VALID BALL - LOST")
-            elif X_ZERO_PX is None or MM_PER_PIXEL is None:
-                label = ("YOLO X:%.0f Y:%.0f C:%d%%" % detection
-                         if detection is not None else "YOLO: NO BALL")
+            elif (X_ZERO_PX is None and MM_PER_PIXEL is None
+                  and not pipe_calibration.CALIBRATION_CONFIRMED):
+                label = ("CHECK X:%+.1f mm C:%d%%" % (
+                    pipe_calibration.pixel_to_mm(detection[0]), detection[2])
+                    if detection is not None else "YOLO: NO BALL")
                 label += "\nCALIBRATION PENDING"
             elif measurement[3] == LOST:
                 label = "NO VALID BALL - LOST"

@@ -4,6 +4,7 @@
 #include "fixtures.h"
 #include "pulse_cycle.h"
 #include "startup_level.h"
+#include "balance_tuning.h"
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -250,198 +251,116 @@ static void feed_center(LinkTest *link, const uint8_t *source, uint32_t sample_m
     center_balance_tick(link, now_ms);
 }
 
+static void finish_center_startup(LinkTest *link)
+{
+    now_ms = 0;
+    pulse_count = up_pulses = 0;
+    pulse_fails = false;
+    link_test_init(link);
+    center_balance_init();
+    for (unsigned i = 0; i < 9000 && center_balance_level_steps() < 0; ++i) {
+        center_balance_tick(link, ++now_ms);
+    }
+}
 static void test_center_startup(void)
 {
     LinkTest link;
+    finish_center_startup(&link);
+    center_balance_menu(&link, now_ms);
+    check(link.steps == 310 && pulse_count == 990 && up_pulses == 650, 24);
+    check(strcmp(link.startup_rows[0], "BAL: S1 WAIT BALL") == 0, 24);
+    check(strstr(link.startup_rows[1], "DIR") == 0, 24);
+    const unsigned done = pulse_count;
+    for (unsigned i = 0; i < 250; ++i) { center_balance_tick(&link, ++now_ms); }
+    check(pulse_count == done, 24);
     now_ms = 0;
-    pulse_count = up_pulses = 0;
     link_test_init(&link);
     center_balance_init();
-    center_balance_menu(&link, now_ms);
-    check(center_balance_level_steps() < 0, 24);
-    check(strcmp(link.startup_rows[0], "BAL: STARTUP UP") == 0 && link.steps == 0, 24);
-    feed_center(&link, fixture_center_left, 100);
-    center_balance_key(&link, LINK_KEY_OK, now_ms);
-    for (unsigned i = 0; i < 5300 && link.steps < 650; ++i) { center_balance_tick(&link, ++now_ms); }
-    check(link.steps == 650 && pulse_count == 650 && up_pulses == 650, 24);
-    check(center_balance_level_steps() < 0, 24);
-    center_balance_menu(&link, now_ms);
-    const char prefix[] = "BAL: RETURN ";
-    check(strncmp(link.startup_rows[0], prefix, sizeof(prefix) - 1u) == 0, 24);
-    const int level = atoi(link.startup_rows[0] + sizeof(prefix) - 1u);
-    check(level > 0 && level < 650, 24);
-    for (unsigned i = 0; i < 5200 && link.steps > level; ++i) { center_balance_tick(&link, ++now_ms); }
-    check(link.steps == level && pulse_count == (unsigned)(1300 - level) && !pulse_direction, 24);
-    check(center_balance_level_steps() == level, 24);
-    feed_center(&link, fixture_center_right, 133);
-    center_balance_key(&link, LINK_KEY_UP, now_ms);
-    center_balance_menu(&link, now_ms);
-    check(strcmp(link.startup_rows[0], "BAL: READY") == 0 && link.steps == level, 24);
-
-    link_test_init(&link);
-    center_balance_init();
-    center_balance_tick(&link, now_ms);
-    const unsigned before_stop = pulse_count;
-    center_balance_key(&link, LINK_KEY_BACK, now_ms);
-    center_balance_tick(&link, now_ms + 20);
-    center_balance_menu(&link, now_ms + 20);
-    check(strcmp(link.startup_rows[0], "BAL: SET LEVEL") == 0 && pulse_count == before_stop, 24);
+    center_balance_tick(&link, 20000);
+    center_balance_menu(&link, 20000);
+    check(strcmp(link.startup_rows[0], "BAL: S5 FAULT") == 0, 24);
 }
-
 static void test_center_balance(void)
 {
     LinkTest link;
-    now_ms = 1000;
+    finish_center_startup(&link);
     pulse_count = 0;
-    link_test_init(&link);
-    center_balance_init();
-    center_balance_key(&link, LINK_KEY_BACK, now_ms);
-    center_balance_key(&link, LINK_JOG_BACK, now_ms);
-    center_balance_tick(&link, now_ms + 8u);
-    check(link.steps == 0 && pulse_count == 0, 24);
-    for (unsigned i = 0; i < 30; ++i) { center_balance_key(&link, LINK_KEY_UP, now_ms); }
-    for (unsigned i = 0; i < 5500; ++i) { center_balance_tick(&link, ++now_ms); }
-    check(link.steps == 650 && pulse_count == 650, 24);
-    center_balance_key(&link, LINK_JOG_FORWARD, now_ms);
-    center_balance_key(&link, LINK_KEY_OK, now_ms);
+    feed_center(&link, fixture_pixel_only, 100);
     center_balance_menu(&link, now_ms);
-    check(link.steps == 650 && strcmp(link.startup_rows[0], "BAL: SET LEVEL") == 0, 24);
-    for (unsigned i = 0; i < 30; ++i) { center_balance_key(&link, LINK_KEY_DOWN, now_ms); }
-    for (unsigned i = 0; i < 5500; ++i) { center_balance_tick(&link, ++now_ms); }
-    check(link.steps == 0 && pulse_count == 1300, 24);
-    center_balance_key(&link, LINK_KEY_UP, now_ms);
-    center_balance_key(&link, LINK_KEY_BACK, now_ms);
-    center_balance_tick(&link, now_ms + 20u);
-    check(link.steps == 0 && pulse_count == 1300, 24);
-
-    /* Simulate starting level setup at a known interior pulse count. */
-    link_test_init(&link);
-    center_balance_init();
-    link.steps = 320;
-    center_balance_key(&link, LINK_KEY_BACK, now_ms);
-    center_balance_key(&link, LINK_KEY_OK, now_ms);
-    pulse_count = 0;
-
-    feed(&link, fixture_valid, sizeof(fixture_valid));
-    center_balance_key(&link, LINK_KEY_UP, now_ms);
-    center_balance_key(&link, LINK_KEY_OK, now_ms);
-    center_balance_menu(&link, now_ms);
-    check(strcmp(link.startup_rows[0], "BAL: WAIT BALL") == 0 && pulse_count == 0, 24);
-
-    feed_center(&link, fixture_center_left, 300);
-    feed_center(&link, fixture_center_left, 333);
-    check(link.center_valid && link.center_error_px == -120 && link.observations == 1 && pulse_count == 0, 24);
-    center_balance_key(&link, LINK_KEY_OK, now_ms);
-    for (uint32_t sample = 366; sample <= 700; sample += 33) {
-        feed_center(&link, fixture_center_left, sample);
-        for (unsigned i = 0; i < 24; ++i) { center_balance_tick(&link, ++now_ms); }
-    }
-    check(link.steps > 338 && pulse_count > 18 && pulse_direction, 24);
-
-    feed_center(&link, fixture_center_right, 729);
+    check(!link.center_valid && pulse_count == 0 && strcmp(link.startup_rows[0], "BAL: S1 WAIT BALL") == 0, 24);
+    feed_center(&link, fixture_center_right, 200);
     center_balance_menu(&link, now_ms);
     link_test_menu(&link, now_ms, 0, (uint8_t *)0x2001E380u);
-    for (uint32_t sample = 762; sample <= 1200; sample += 33) {
-        feed_center(&link, fixture_center_right, sample);
-        for (unsigned i = 0; i < 50; ++i) { center_balance_tick(&link, ++now_ms); }
+    check(link.center_error_mm == 30 && link.center_velocity_mm_s == 0, 24);
+    check(strcmp(link.startup_rows[0], "BAL: S2 ZERO") == 0, 24);
+    for (uint32_t t = 233; t < 800; t += 33) {
+        feed_center(&link, fixture_center_right, t);
+        for (unsigned i = 0; i < 20; ++i) { center_balance_tick(&link, ++now_ms); }
     }
-    check(link.steps < 302 && !pulse_direction, 24);
-    const unsigned before_loss = pulse_count;
-
-    feed_center(&link, fixture_center_lost, 1224);
-    center_balance_menu(&link, now_ms);
-    check(strcmp(link.startup_rows[0], "BAL: HOLD") == 0 && pulse_count == before_loss, 24);
-    feed_center(&link, fixture_center_right, 1257);
-    center_balance_menu(&link, now_ms);
-    check(strcmp(link.startup_rows[0], "BAL: ACTIVE") == 0 && pulse_count == before_loss, 24);
-    for (uint32_t sample = 1290; sample < 1557; sample += 33) {
-        now_ms += 15u;
-        feed_center(&link, fixture_center_lost, sample);
+    check(link.steps > 310 && pulse_count > 0 && pulse_direction, 24);
+    feed_center(&link, fixture_center_near_left, 850);
+    const int frozen = link.steps;
+    const unsigned pulses = pulse_count;
+    for (uint32_t t = 883; t < 1400; t += 33) {
+        feed_center(&link, fixture_center_near_right, t);
+        for (unsigned i = 0; i < 20; ++i) { center_balance_tick(&link, ++now_ms); }
     }
     center_balance_menu(&link, now_ms);
-    check(strcmp(link.startup_rows[0], "BAL: HOLD") == 0
-          && strcmp(link.startup_rows[1], "WAIT BALL AUTO") == 0 && pulse_count == before_loss, 24);
-    feed_center(&link, fixture_center_left, 1557);
+    check(frozen != 310 && link.steps == frozen && pulse_count == pulses, 24);
+    check(strcmp(link.startup_rows[0], "BAL: S3 HOLD ZERO") == 0, 24);
+    feed_center(&link, fixture_center_fast, 1450);
+    for (unsigned i = 0; i < 20; ++i) { center_balance_tick(&link, ++now_ms); }
+    check(link.steps > frozen && pulse_direction && link.center_velocity_mm_s == 40, 24);
+    feed_center(&link, fixture_center_lost, 1500);
+    const unsigned lost_pulses = pulse_count;
+    for (unsigned i = 0; i < 250; ++i) { center_balance_tick(&link, ++now_ms); }
     center_balance_menu(&link, now_ms);
-    check(strcmp(link.startup_rows[0], "BAL: ACTIVE") == 0 && pulse_count == before_loss, 24);
-    feed_center(&link, fixture_center_left, 1590);
-    check(pulse_count > before_loss && pulse_direction, 24);
-
-    center_balance_key(&link, LINK_KEY_BACK, now_ms);
-    center_balance_key(&link, LINK_KEY_DOWN, now_ms);
-    center_balance_key(&link, LINK_KEY_OK, now_ms);
-    const int32_t before_reverse = link.steps;
-    feed_center(&link, fixture_center_right, 1623);
-    feed_center(&link, fixture_center_right, 1656);
-    check(link.steps > before_reverse && pulse_direction, 24);
-    const unsigned before_stop = pulse_count;
-    center_balance_key(&link, LINK_KEY_BACK, now_ms);
-    feed_center(&link, fixture_center_right, 1689);
-    feed_center(&link, fixture_center_right, 1722);
-    check(pulse_count == before_stop, 24);
-
-    center_balance_key(&link, LINK_KEY_OK, now_ms);
-    feed_center(&link, fixture_center_right, 1755);
-    const unsigned before_timeout = pulse_count;
-    now_ms += 180;
-    feed_center(&link, fixture_center_right, 1755);  /* A repeat cannot refresh the watchdog. */
+    check(pulse_count == lost_pulses && strcmp(link.startup_rows[0], "BAL: S1 WAIT BALL") == 0, 24);
+    feed_center(&link, fixture_center_left, 1600);
+    for (unsigned i = 0; i < 20; ++i) { center_balance_tick(&link, ++now_ms); }
+    check(!pulse_direction && pulse_count > lost_pulses, 24);
+    const uint32_t rx = link.center_rx_ms;
+    for (unsigned i = 0; i < 15; ++i) { feed_center(&link, fixture_center_left, 1600); }
+    check(link.center_rx_ms == rx, 24);
     center_balance_menu(&link, now_ms);
-    check(strcmp(link.startup_rows[0], "BAL: HOLD") == 0
-          && strcmp(link.startup_rows[1], "WAIT BALL AUTO") == 0 && pulse_count == before_timeout, 24);
-
+    check(strcmp(link.startup_rows[0], "BAL: S1 WAIT BALL") == 0, 24);
     center_balance_key(&link, LINK_KEY_BACK, now_ms);
-    feed_center(&link, fixture_center_left, 2000);
-    center_balance_key(&link, LINK_KEY_UP, now_ms);
-    center_balance_key(&link, LINK_KEY_OK, now_ms);
-    feed_center(&link, fixture_center_left, 2033);
-    feed_center(&link, fixture_center_left, 2066);
-    const unsigned before_hold = pulse_count;
-    feed_center(&link, fixture_center_lost, 2099);
-    for (unsigned i = 0; i < 60; ++i) { center_balance_tick(&link, ++now_ms); }
-    check(pulse_count == before_hold, 24);
-    feed_center(&link, fixture_center_left, 2198);
+    const unsigned stopped = pulse_count;
+    feed_center(&link, fixture_center_right, 1800);
     center_balance_menu(&link, now_ms);
-    check(strcmp(link.startup_rows[0], "BAL: ACTIVE") == 0, 24);
-    feed_center(&link, fixture_center_left, 2231);
-    check(pulse_count > before_hold, 24);
-
-    link_test_init(&link);
-    center_balance_init();
-    link.steps = 320;
-    center_balance_key(&link, LINK_KEY_BACK, now_ms);
+    check(pulse_count == stopped && strcmp(link.startup_rows[0], "BAL: S4 STOPPED") == 0, 24);
     center_balance_key(&link, LINK_KEY_OK, now_ms);
-    feed_center(&link, fixture_center_near_left, 3000);
-    center_balance_key(&link, LINK_KEY_OK, now_ms);
+    feed_center(&link, fixture_center_right, 1900);
     center_balance_menu(&link, now_ms);
-    check(strcmp(link.startup_rows[0], "BAL: SELECT DIR") == 0, 24);
-    center_balance_key(&link, LINK_KEY_UP, now_ms);
-    center_balance_key(&link, LINK_KEY_OK, now_ms);
-    const unsigned at_center = pulse_count;
-    for (unsigned i = 1; i <= 100; ++i) {
-        const uint8_t *frame = i % 2u ? fixture_center_near_left : fixture_center_near_right;
-        feed_center(&link, frame, 3000u + 33u * i);
-        now_ms += 15u;
-        center_balance_tick(&link, now_ms);
-    }
-    check(link.steps == 320 && pulse_count == at_center, 24);
-
-    /* Level points close to either end still obey the absolute limits in both directions. */
+    check(strcmp(link.startup_rows[0], "BAL: S2 ZERO") == 0, 24);
+    feed_center(&link, fixture_center_edge, 1950);
+    const unsigned edge = pulse_count;
+    feed_center(&link, fixture_center_near_left, 2000);
+    center_balance_menu(&link, now_ms);
+    check(pulse_count == edge && strcmp(link.startup_rows[0], "BAL: S5 FAULT") == 0, 24);
+    finish_center_startup(&link);
+    pulse_fails = true;
+    feed_center(&link, fixture_center_right, 3000);
+    for (unsigned i = 0; i < 20; ++i) { center_balance_tick(&link, ++now_ms); }
+    center_balance_menu(&link, now_ms);
+    check(link.step_fault && strcmp(link.startup_rows[0], "BAL: S5 FAULT") == 0, 24);
+    pulse_fails = false;
     for (unsigned end = 0; end < 2; ++end) {
+        now_ms = 0;
         link_test_init(&link);
         center_balance_init();
-        link.steps = end == 0 ? 10 : 640;
+        link.steps = end ? 640 : 10;
         center_balance_key(&link, LINK_KEY_BACK, now_ms);
         center_balance_key(&link, LINK_KEY_OK, now_ms);
-        center_balance_key(&link, end == 0 ? LINK_KEY_DOWN : LINK_KEY_UP, now_ms);
-        feed_center(&link, fixture_center_left, 7000);
-        center_balance_key(&link, LINK_KEY_OK, now_ms);
-        const unsigned before_end = pulse_count;
-        for (uint32_t sample = 7033; sample < 7500; sample += 33) {
-            feed_center(&link, fixture_center_left, sample);
-            for (unsigned i = 0; i < 24; ++i) { center_balance_tick(&link, ++now_ms); }
+        pulse_count = 0;
+        for (uint32_t t = 4000; t < 4800; t += 33) {
+            feed_center(&link, end ? fixture_center_right : fixture_center_left, t);
+            for (unsigned i = 0; i < 20; ++i) { center_balance_tick(&link, ++now_ms); }
+            check(link.steps >= 0 && link.steps <= 650, 24);
         }
-        check(link.steps == (end == 0 ? 0 : 650) && pulse_count == before_end + 10, 24);
+        check(link.steps == (end ? 650 : 0) && pulse_count == 10, 24);
     }
+    check(g_balance_tuning.magic == 0x42414C31u && g_balance_tuning.version == 1, 24);
 }
 
 int main(void)
@@ -467,6 +386,7 @@ int main(void)
     check(link.value == 0 && link.packets == 2 && link.crc_errors != 0, 3);
     feed(&link, fixture_valid, sizeof(fixture_valid));
     check(link.observations == 1 && link.last_status == 1, 4);
+    check(link.center_error_mm == 123 && link.center_velocity_mm_s == -45, 4);
     feed(&link, fixture_up, sizeof(fixture_up));
     feed(&link, fixture_back, sizeof(fixture_back));
     check(link.value == 0 && link.last_key == 0x43, 5);

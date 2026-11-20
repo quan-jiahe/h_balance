@@ -4,6 +4,14 @@
 
 识别版 `main.py` 默认以原始画面 X=320 px 为中心，通过版本 2 观测帧发送球心相对于目标的像素偏差。将 `CENTER_BALANCE_X_PX` 改为实测轨道中点。用 `None` 恢复下文的毫米标定模式。居中联调需要 IO9/IO10 双向串口和配套 F407 固件。见 [居中固件及上电步骤](../stm32f407_uart_test/README.md#钢球居中联调固件)。
 
+## 当前毫米稳球配套
+
+本目录已经带入实机确认的 21 点刻度表 `pipe_calibration.py`，左正右负、每格10 mm。`main.py` 默认毫米协议 v1、`CENTER_BALANCE_X_PX=None`，使用当前 steel236 模型。上传时同时更新 `main.py`、`touch_ui.py`、`pipe_calibration.py`、`steel_ball_detector.py`，保留板上已验证模型和原生库。新模型来源及校验记录见 `model_steel236.json`。像素 v2模式不适用于当前毫米控制器。
+
+F407方向已固定为-1，屏幕不显示DIR选择；S1等待球后自动稳球，S3锁住当时电机位置，返回可停止。新界面配合 BAL:S1～S5 状态显示，控制逻辑由F407负责。
+
+刻度仍仅在2026-11-19标定的摄像头位置及管道角度下验证，未加入动态透视补偿。本次未连接K230，未替换设备上的界面文件。原板上毫米程序已能发送同格式观测，更新 touch_ui.py 可同步新的提示。
+
 ## 独立采集训练照片
 
 `capture_training_photos.py` 显示 640×480 实时预览，每 0.5 秒保存一张原始 JPEG 到 `/data/steel_ball_photos/batch_NNN/`。在 Windows 的“此电脑 → CanMV → data”中可找到照片。每次启动新开一批，从 `000001.jpg` 开始编号。屏幕左上角显示已保存张数和 F407 的状态回包，保存的照片没有状态文字。K230 独立运行时也能拍摄，界面显示 `F407: NO STATUS`。如果存储写入报错，程序会停止拍摄并保留此前的照片。

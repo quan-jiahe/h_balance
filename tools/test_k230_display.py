@@ -64,7 +64,8 @@ class DisplayTests(unittest.TestCase):
         path = Path(__file__).resolve().parents[1] / "k230" / "touch_ui.py"
         spec = importlib.util.spec_from_file_location("display_under_test", path)
         module = importlib.util.module_from_spec(spec)
-        with patch.dict(sys.modules, modules):
+        with patch.dict(sys.modules, modules), patch.object(
+                sys, "path", [str(path.parent)] + sys.path):
             spec.loader.exec_module(module)
         self.sent = []
         self.module = module
@@ -155,31 +156,17 @@ class DisplayTests(unittest.TestCase):
         forward(None)
         self.assertEqual(self.sent, [0, 4])
 
-    def test_pulse_cycle_disables_jog_and_shows_stop(self):
+    def test_first_task_menu_blocks_jog_and_shows_start(self):
         frame = Mock()
         frame.bytearray.return_value = bytes(448 * 336 * 2)
-        for direction in ("FWD", "REV"):
-            self.ui.update(["RX:OK", "MOTOR:" + direction, "RANGE:0-650", "STEP:+325"],
-                           "", True, frame, None)
-            self.assertFalse(self.ui.jog_ready)
-            self.assertEqual(self.ui.last_help, "返回：STOP")
-
-    def test_center_balance_disables_jog_and_shows_stop(self):
-        frame = Mock()
-        frame.bytearray.return_value = bytes(448 * 336 * 2)
-        for state in ("BAL: STARTUP UP", "BAL: RETURN 270"):
-            self.ui.update(["RX:OK", state, "BACK:STOP", "STEP:500/650"], "", True, frame, None)
-            self.assertFalse(self.ui.jog_ready)
-            self.assertEqual(self.ui.last_help, "BACK:STOP")
-        self.ui.update(["RX:OK", "BAL: SET LEVEL", "UP/DN:25 JOG:1", "STEP:0/650"],
-                       "", True, frame, None)
-        self.assertTrue(self.ui.jog_ready)
-        self.assertIn("OK:SAVE LEVEL", self.ui.last_help)
-        for state in ("BAL: ACTIVE", "BAL: HOLD"):
-            self.ui.update(["RX:OK", state, "DX:-8px DIR:+1", "STEP:+2"],
-                           "", True, frame, None)
-            self.assertFalse(self.ui.jog_ready)
-            self.assertEqual(self.ui.last_help, "OK/BACK:STOP")
+        self.ui.update(["F407 RX:OK", "T1: WAIT BALL", "A:+0.1 deg", "STEP:240/640"],
+                       "X:+0 mm", True, frame, None)
+        self.assertEqual(self.ui.last_help, "OK:START\nBACK:STOP")
+        self.buttons[-2].add_event.call_args.args[0](None)
+        self.assertEqual(self.sent, [])
+        self.ui.update(["F407 RX:OK", "T1: HOLD", "A:+0.1 deg", "STEP:240/640"],
+                       "X:+0 mm", True, frame, None)
+        self.assertEqual(self.ui.last_help, "BACK:STOP")
 
     def test_preview_pixels_overlay_scaling_and_no_ball_refresh(self):
         frame = Mock()
@@ -187,16 +174,22 @@ class DisplayTests(unittest.TestCase):
         self.ui.update(["a", "b", "c", "d"], "YOLO: NO BALL\nCALIBRATION PENDING", True,
                        frame, (100, 200, 40, 20))
         y = self.module.ALIGN_LINE_Y
-        frame.draw_line.assert_called_once_with(0, y, 447, y, color=(255, 0, 0), thickness=2)
+        frame.draw_line.assert_any_call(0, y, 447, y, color=(255, 0, 0), thickness=2)
         frame.draw_rectangle.assert_called_once_with(70, 140, 28, 14, color=(0, 255, 0), thickness=2)
         frame.draw_cross.assert_called_once_with(84, 147, color=(255, 255, 0), size=8)
+        self.assertEqual(len(self.module.PIPE_TICK_X), 21)
+        self.assertEqual(self.module.PIPE_TICK_MM, 10)
+        self.assertTrue(all(a < b for a, b in zip(self.module.PIPE_TICK_X, self.module.PIPE_TICK_X[1:])))
+        self.assertEqual(frame.draw_line.call_count, 22)
+        labels = [call.args[3] for call in frame.draw_string_advanced.call_args_list]
+        self.assertEqual(labels, [str(v) if v <= 0 else "+%d" % v for v in range(10, -11, -1)])
         self.assertEqual(self.ui.preview_data, frame.bytearray.return_value)
         self.assertEqual(self.ui.preview_descriptor["header"]["cf"], 9)
         self.ui.preview.set_src.assert_called_once_with(self.ui.preview_descriptor)
         self.ui.preview.invalidate.assert_called_once_with()
         frame.reset_mock()
         self.ui.update(["a", "b", "c", "d"], "YOLO: NO BALL", False, frame, None)
-        frame.draw_line.assert_called_once_with(0, y, 447, y, color=(255, 0, 0), thickness=2)
+        frame.draw_line.assert_any_call(0, y, 447, y, color=(255, 0, 0), thickness=2)
         frame.draw_rectangle.assert_not_called()
         frame.draw_cross.assert_not_called()
         self.assertEqual(self.ui.preview.invalidate.call_count, 2)
@@ -209,7 +202,7 @@ class DisplayTests(unittest.TestCase):
         frame.bytearray.return_value = bytes(448 * 336 * 2)
         with patch.object(self.module, "ALIGN_LINE_Y", 100):
             self.ui.update(["", "", "", ""], "STOPPED - LOST", False, frame, None)
-        frame.draw_line.assert_called_once_with(0, 100, 447, 100, color=(255, 0, 0), thickness=2)
+        frame.draw_line.assert_any_call(0, 100, 447, 100, color=(255, 0, 0), thickness=2)
         for y in (-1, 336, 1.5):
             with self.subTest(y=y), patch.object(self.module, "ALIGN_LINE_Y", y):
                 with self.assertRaises(ValueError):

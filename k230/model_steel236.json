@@ -1,0 +1,26 @@
+{
+  "filename": "steel_ball_236_nncase2.9.kmodel",
+  "source": "Local YOLO11n trained from the selected 236 steel-ball photos",
+  "checkpoint": "D:\\h_balance\\runs\\detect\\steel236_gpu\\weights\\best.pt",
+  "checkpoint_sha256": "ac90232f44f488002fa6dfece98208c0a6c71e65e845b1a55496b43603738518",
+  "training_images": 188,
+  "validation_images": 42,
+  "gap_images": 6,
+  "best_epoch": 25,
+  "nncase_version": "2.9.0",
+  "input_size": [
+    320,
+    320
+  ],
+  "input_type": "uint8",
+  "input_layout": "NCHW",
+  "labels": [
+    "steel"
+  ],
+  "calibration_images": 40,
+  "activation_quantization": "uint8",
+  "weight_quantization": "int16",
+  "size": 5760856,
+  "sha256": "f791d4de485357bcae7f84a878032911ada85d06b93c78e450fd60fe108eae81",
+  "device_path": "/sdcard/kmodel/steel_ball_236_nncase2.9.kmodel"
+}

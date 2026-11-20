@@ -43,3 +43,13 @@ HEX: 12624 bytes at 0x08000000..0x0800314F; checksums and Reset/SysTick/USART3 v
 Checks: 107 Cortex-M and 16 Python checks, including startup travel 0-650-310, standstill reference availability, vision handoff, automatic reacquisition and manual STOP
 Physical deployment: this revision has not been flashed. OLED controller, display and installed IMU readings need hardware verification.
 SHA256: d97099395224633d92d4fcd5ff02c49e5e2de73bd48f676e89efb299aa5ba7cf
+
+Firmware update: F407_K230_Center_Balance.hex (2026-11-20 mm auto-hold)
+Keil target: F407_K230_Center_Balance; AC6.24, 0 errors, 0 warnings
+Code=11776 RO-data=700 RW-data=60 ZI-data=1548 bytes
+Input: v1 int16 mm/mm_s, fixed logical DIR=-1; S1 auto-detect, S2 zero control, S3 latch current pulse position
+310 is startup/display reference only; no stable-state motor return
+Checks: 147 Cortex-M, 23 Python; HEX records, flash bounds and vectors verified
+SWD tuning symbol verified in map at 0x20000008; tool signature/write verification mocked
+Physical programming and live tuning NOT performed this update
+SHA256: 89539a19e9000043babc9298a7af567d5cc74cdfe112facf3c4373b9348ee80e

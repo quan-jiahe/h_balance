@@ -1,8 +1,8 @@
-"""Model2 inference using this Yahboom firmware's native YOLO11 runtime."""
+"""Local steel236 inference using the Yahboom firmware's native YOLO11 runtime."""
 
 import math
 
-MODEL_PATH = "/sdcard/kmodel/steel_ball_model2_nncase2.9.kmodel"
+MODEL_PATH = "/sdcard/kmodel/steel_ball_236_nncase2.9.kmodel"
 MODEL_INPUT_SIZE = [320, 320]
 CONF_THRESHOLD = 0.50
 # Start with the whole image; restrict this to the real platform after mounting.

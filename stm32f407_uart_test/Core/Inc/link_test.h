@@ -32,7 +32,8 @@ typedef struct {
     uint32_t center_observations;
     uint32_t center_rx_ms;
     uint32_t center_sample_ms;
-    int16_t center_error_px;
+    int16_t center_error_mm;
+    int16_t center_velocity_mm_s;
     bool center_valid;
     uint32_t crc_errors;
     int32_t value;
