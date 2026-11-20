@@ -65,6 +65,11 @@ def main():
     ))
     original = root / "MDK-ARM/F407_K230_UART.uvprojx"
     tree = ET.parse(original)
+    targets = tree.find("./Targets")
+    test_target = targets.find("./Target[TargetName='F407_K230_UART']")
+    for target in list(targets):
+        if target is not test_target:
+            targets.remove(target)
     for tag in ("FilePath", "ScatterFile"):
         for element in tree.findall(".//" + tag):
             element.text = str((original.parent / element.text.replace("\\", "/")).resolve())

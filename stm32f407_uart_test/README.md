@@ -2,7 +2,7 @@
 
 ## 钢球居中联调固件
 
-`Firmware/F407_K230_Center_Balance.hex` 使用现有 STEP/DIR 接线和 K230 识别程序。Keil 重新编译时在 C/C++ 的 Define 中加 `F407_CENTER_BALANCE`。这台电脑用 `python -B .\Tests\build\local_ac67.py center`，编译输出位于 `Tests/build/FirmwareObjects/`。
+`Firmware/F407_K230_Center_Balance.hex` 使用现有 STEP/DIR 接线和 K230 识别程序。用 Keil MDK 5 打开 [F407_K230_UART.uvprojx](MDK-ARM/F407_K230_UART.uvprojx)，在目标下拉框选择 **F407_K230_Center_Balance** 并执行 **Rebuild**。工程配置使用 Arm Compiler 6.24。该目标已设置 `F407_CENTER_BALANCE`，输出到 `MDK-ARM/Objects/CenterBalance/F407_K230_Center_Balance.hex`。
 
 - 电机 STEP 接 PE9、DIR 接 PE7。K230 IO9 → F407 PD9，F407 PD8 → K230 IO10，两板共地，115200 / 8N1。闭环调试需要串口双向连线。
 - K230 用识别版 `k230/main.py`，配套文件见 [K230 README](../k230/README.md)。先保留拍照脚本和已验证的模型文件，再用 CanMV IDE 运行识别版。居中点用 640×480 原始推理画面的 `CENTER_BALANCE_X_PX`，默认 320。把球放到轨道物理中心，读屏幕上的实测 X，必要时用该值修改配置。
@@ -15,7 +15,7 @@ K230 居中观测使用 A5 5A 封装的版本 2 帧，位置是相对目标的�
 
 ## 拍照联调用往返固件
 
-当前 Keil 工程上电即运行 0–650 步往返，启动时关闭 IMU 找平流程。上电前把连杆手动放到底板，第 0 步以该位置为准。650 步是实测机械上界，步数来自已发出的脉冲。首次试机取出钢珠，核对运动方向和行程。
+Keil 的 **F407_K230_UART** 目标用于拍照联调。该固件上电即运行 0–650 步往返，启动时关闭 IMU 找平流程。上电前把连杆手动放到底板，第 0 步以该位置为准。650 步是实测机械上界，步数来自已发出的脉冲。首次试机取出钢珠，核对运动方向和行程。
 
 F407 通过 PE9 输出 STEP、PE7 输出 DIR。到第 0 或 650 步后直接换向，端点没有额外停顿。两端保留 12 ms 的减速脉冲间隔，中段间隔在 4–8 ms 中按伪随机序列逐趟变化，相邻两趟速度不同。每约 250 ms 从 USART3 PD8 输出四行状态，含 `MOTOR:FWD`、`MOTOR:REV`、`MOTOR:STOP` 或 `MOTOR:ERR` 和 `STEP:+123`。拍照联调只需接 PD8 → K230 IO10 和 GND，`115200 / 8N1`。
 
@@ -27,7 +27,7 @@ K230 的 `capture_training_photos.py` 独立每约 0.5 秒保存一张照片。I
 
 ## 开机自检和自动找平
 
-找平版使用 `Firmware/F407_K230_Startup_Level.hex`，也可以打开下文的 Keil 工程重新编译并 Load。K230 已部署的界面能显示新状态，更新 `k230/touch_ui.py` 后还会在扫描和回平时显示停止提示。现有主程序、串口帧格式和 YOLO 模型继续使用。
+找平版使用历史固件 `Firmware/F407_K230_Startup_Level.hex`。K230 已部署的界面能显示新状态，更新 `k230/touch_ui.py` 后还会在扫描和回平时显示停止提示。现有主程序、串口帧格式和 YOLO 模型继续使用。
 
 | 接线 | F407 |
 | --- | --- |
@@ -75,8 +75,8 @@ PD8/PD9 的 USART3 AF7 映射依据：[ST 数据手册](https://www.st.com/resou
 
 ## 编译和烧录
 
-1. 用 Keil MDK 5 打开 `MDK-ARM/F407_K230_UART.uvprojx`，选择 **Arm Compiler 6**。本机已用 MDK 5.43 / AC6 6.24 完整编译，0 错误、0 警告。
-2. 直接烧录预编译的 `Firmware/F407_K230_Stepper_Jog.hex`。若按 F7 从源码重新编译，输出为 `MDK-ARM/Objects/F407_K230_UART.hex`。`Firmware/F407_K230_UART.hex` 是旧通讯测试备份。
+1. 单脉冲点动使用预编译的历史固件 `Firmware/F407_K230_Stepper_Jog.hex`。`Firmware/F407_K230_UART.hex` 是旧通讯测试备份。
+2. 当前 Keil 的 **F407_K230_UART** 目标生成拍照往返固件，输出为 `MDK-ARM/Objects/F407_K230_UART.hex`。
 3. 通过 ST-Link / SWD 烧录。可以直接用 STM32CubeProgrammer 或 ST-Link Utility 加载 HEX，核对芯片为 F407VE，Flash 起始地址 `0x08000000`，烧录后复位，BOOT0 为 0。
 4. 若直接用 Keil 下载：在 Options for Target → Debug 选择 **ST-Link Debugger / SW**；在 Flash Download 添加适用于 STM32F407 的 **STM32F4xx 512KB Flash** 算法。若列表没有该芯片/算法，先通过 Pack Installer 安装 `Keil::STM32F4xx_DFP`。工程已包含编译所需的 CMSIS 头文件和启动文件，编译本身不需要在线下载 HAL。
 5. 在 K230 上同时更新 `main.py`、`touch_ui.py` 和 `balance_ui_20.fnt`。首次部署的完整文件清单见 [K230 README](../k230/README.md)。串口接线后，等待主控菜单和步数出现。
