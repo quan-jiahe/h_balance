@@ -60,6 +60,7 @@ def main():
         "center_near_right": k230.build_frame(7, 700, (1, 0, 90, 1)),
         "center_fast": k230.build_frame(8, 800, (0, 40, 90, 1)),
         "center_edge": k230.build_frame(9, 900, (101, 0, 90, 1)),
+        "center_edge_left": k230.build_frame(11, 950, (-101, 0, 90, 1)),
         "pixel_only": k230.build_frame(10, 1000, (30, 0, 90, 1), center=True),
     }
     (build / "fixtures.h").write_text("\n".join(

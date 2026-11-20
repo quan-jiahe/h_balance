@@ -53,3 +53,11 @@ Checks: 147 Cortex-M, 23 Python; HEX records, flash bounds and vectors verified
 SWD tuning symbol verified in map at 0x20000008; tool signature/write verification mocked
 Physical programming and live tuning NOT performed this update
 SHA256: 89539a19e9000043babc9298a7af567d5cc74cdfe112facf3c4373b9348ee80e
+
+Firmware correction: 2026-11-20 mm-axis sign and continuous out-of-range correction
+Original pixel DIR=-1 retained; left-positive mm axis contributes an additional sign flip
+Removed +/-100 mm ball fault and +/-90 mm forced edge demand; motor travel 0..650 retained
+S5 reports STEP PULSE FAIL or STARTUP TIMEOUT; stable motor position remains latched
+AC6.24: 0 errors, 0 warnings; Code=11920 RO-data=684 RW-data=60 ZI-data=1548
+153 Cortex-M checks and 23 Python checks pass; physical flashing NOT performed
+SHA256: 65aee1c42b7ed8038ea69e359a3efb86d0157eb907f3092398f86e0f7c023a93

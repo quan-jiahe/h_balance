@@ -279,6 +279,7 @@ static void test_center_startup(void)
     center_balance_tick(&link, 20000);
     center_balance_menu(&link, 20000);
     check(strcmp(link.startup_rows[0], "BAL: S5 FAULT") == 0, 24);
+    check(strcmp(link.startup_rows[1], "STARTUP TIMEOUT") == 0, 24);
 }
 static void test_center_balance(void)
 {
@@ -297,7 +298,7 @@ static void test_center_balance(void)
         feed_center(&link, fixture_center_right, t);
         for (unsigned i = 0; i < 20; ++i) { center_balance_tick(&link, ++now_ms); }
     }
-    check(link.steps > 310 && pulse_count > 0 && pulse_direction, 24);
+    check(link.steps < 310 && pulse_count > 0 && !pulse_direction, 24);
     feed_center(&link, fixture_center_near_left, 850);
     const int frozen = link.steps;
     const unsigned pulses = pulse_count;
@@ -310,7 +311,7 @@ static void test_center_balance(void)
     check(strcmp(link.startup_rows[0], "BAL: S3 HOLD ZERO") == 0, 24);
     feed_center(&link, fixture_center_fast, 1450);
     for (unsigned i = 0; i < 20; ++i) { center_balance_tick(&link, ++now_ms); }
-    check(link.steps > frozen && pulse_direction && link.center_velocity_mm_s == 40, 24);
+    check(link.steps < frozen && !pulse_direction && link.center_velocity_mm_s == 40, 24);
     feed_center(&link, fixture_center_lost, 1500);
     const unsigned lost_pulses = pulse_count;
     for (unsigned i = 0; i < 250; ++i) { center_balance_tick(&link, ++now_ms); }
@@ -318,7 +319,7 @@ static void test_center_balance(void)
     check(pulse_count == lost_pulses && strcmp(link.startup_rows[0], "BAL: S1 WAIT BALL") == 0, 24);
     feed_center(&link, fixture_center_left, 1600);
     for (unsigned i = 0; i < 20; ++i) { center_balance_tick(&link, ++now_ms); }
-    check(!pulse_direction && pulse_count > lost_pulses, 24);
+    check(pulse_direction && pulse_count > lost_pulses, 24);
     const uint32_t rx = link.center_rx_ms;
     for (unsigned i = 0; i < 15; ++i) { feed_center(&link, fixture_center_left, 1600); }
     check(link.center_rx_ms == rx, 24);
@@ -334,16 +335,27 @@ static void test_center_balance(void)
     center_balance_menu(&link, now_ms);
     check(strcmp(link.startup_rows[0], "BAL: S2 ZERO") == 0, 24);
     feed_center(&link, fixture_center_edge, 1950);
+    center_balance_menu(&link, now_ms);
+    check(strcmp(link.startup_rows[0], "BAL: S2 ZERO") == 0, 24);
     const unsigned edge = pulse_count;
+    for (unsigned i = 0; i < 20; ++i) { center_balance_tick(&link, ++now_ms); }
+    check(pulse_count > edge && !pulse_direction, 24);
     feed_center(&link, fixture_center_near_left, 2000);
     center_balance_menu(&link, now_ms);
-    check(pulse_count == edge && strcmp(link.startup_rows[0], "BAL: S5 FAULT") == 0, 24);
+    check(strcmp(link.startup_rows[0], "BAL: S3 HOLD ZERO") == 0, 24);
+    feed_center(&link, fixture_center_edge_left, 2100);
+    center_balance_menu(&link, now_ms);
+    check(strcmp(link.startup_rows[0], "BAL: S2 ZERO") == 0, 24);
+    const unsigned negative_edge = pulse_count;
+    for (unsigned i = 0; i < 20; ++i) { center_balance_tick(&link, ++now_ms); }
+    check(pulse_count > negative_edge && pulse_direction, 24);
     finish_center_startup(&link);
     pulse_fails = true;
     feed_center(&link, fixture_center_right, 3000);
     for (unsigned i = 0; i < 20; ++i) { center_balance_tick(&link, ++now_ms); }
     center_balance_menu(&link, now_ms);
     check(link.step_fault && strcmp(link.startup_rows[0], "BAL: S5 FAULT") == 0, 24);
+    check(strcmp(link.startup_rows[1], "STEP PULSE FAIL") == 0, 24);
     pulse_fails = false;
     for (unsigned end = 0; end < 2; ++end) {
         now_ms = 0;
@@ -354,7 +366,7 @@ static void test_center_balance(void)
         center_balance_key(&link, LINK_KEY_OK, now_ms);
         pulse_count = 0;
         for (uint32_t t = 4000; t < 4800; t += 33) {
-            feed_center(&link, end ? fixture_center_right : fixture_center_left, t);
+            feed_center(&link, end ? fixture_center_left : fixture_center_right, t);
             for (unsigned i = 0; i < 20; ++i) { center_balance_tick(&link, ++now_ms); }
             check(link.steps >= 0 && link.steps <= 650, 24);
         }

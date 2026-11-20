@@ -2,14 +2,15 @@
 #include "balance_tuning.h"
 #include <math.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include "board.h"
 
 enum {
     AXIS_MAX_STEPS = 650, STARTUP_LEVEL_STEPS = 310,
     COARSE_JOG_STEPS = 25, MAX_COMMAND_CHANGE = 8,
     PULSE_INTERVAL_MS = 8, VISION_TIMEOUT_MS = 180,
-    STARTUP_TIMEOUT_MS = 20000, FIXED_MOTOR_SIGN = -1
+    STARTUP_TIMEOUT_MS = 20000, FIXED_MOTOR_SIGN = -1,
+    /* DIR=-1 was measured with right-positive pixels; mm is left-positive. */
+    MM_AXIS_SIGN = -1, MOTOR_MM_SIGN = FIXED_MOTOR_SIGN * MM_AXIS_SIGN
 };
 
 _Static_assert(sizeof(BalanceTuning) == 52, "SWD tuning layout changed");
@@ -29,7 +30,9 @@ typedef struct {
 static BallController ball;
 static uint32_t seen_observations, last_pulse_ms, started_ms;
 static int32_t target_steps, level_steps, anchor_steps;
-static bool startup_motion, armed, active, faulted;
+static bool startup_motion, armed, active;
+typedef enum { NO_FAULT, BOOT_TIMEOUT, STEP_PULSE } FaultReason;
+static FaultReason fault_reason;
 
 static float clamp(float value, float min, float max)
 {
@@ -51,6 +54,13 @@ static void hold_here(const LinkTest *link)
     target_steps = anchor_steps = link->steps;
     ball = (BallController){0};
     active = false;
+}
+
+static void fail(const LinkTest *link, FaultReason reason)
+{
+    if (fault_reason != NO_FAULT) { return; }
+    fault_reason = reason;
+    hold_here(link);
 }
 
 /* The K230 already estimates mm/s; do not differentiate/filter it a second time. */
@@ -99,12 +109,11 @@ static void update_target(const LinkTest *link)
     float demand = g_balance_tuning.gain * (g_balance_tuning.kp * error
         + kv * (ball.reference - velocity) + ball.integral)
         + g_balance_tuning.kff * velocity + g_balance_tuning.kff2 * velocity * speed;
-    if (distance >= 90.0f) { demand = direction * g_balance_tuning.max_offset; }
     demand = clamp(demand, -g_balance_tuning.max_offset, g_balance_tuning.max_offset);
-    const float physical = clamp(anchor_steps + FIXED_MOTOR_SIGN * demand, 0.0f, AXIS_MAX_STEPS);
-    demand = FIXED_MOTOR_SIGN * (physical - anchor_steps);
+    const float physical = clamp(anchor_steps + MOTOR_MM_SIGN * demand, 0.0f, AXIS_MAX_STEPS);
+    demand = MOTOR_MM_SIGN * (physical - anchor_steps);
     ball.demand += clamp(demand - ball.demand, -MAX_COMMAND_CHANGE, MAX_COMMAND_CHANGE);
-    target_steps = bounded_target(anchor_steps + FIXED_MOTOR_SIGN * (int32_t)lroundf(ball.demand));
+    target_steps = bounded_target(anchor_steps + MOTOR_MM_SIGN * (int32_t)lroundf(ball.demand));
     ball.previous_error = error;
 }
 
@@ -113,7 +122,8 @@ int32_t center_balance_level_steps(void) { return level_steps; }
 void center_balance_init(void)
 {
     ball = (BallController){0};
-    active = faulted = false;
+    active = false;
+    fault_reason = NO_FAULT;
     armed = startup_motion = true;
     target_steps = AXIS_MAX_STEPS;
     level_steps = -1;
@@ -127,7 +137,7 @@ void center_balance_key(const LinkTest *link, uint8_t key, uint32_t now)
     if (key == LINK_KEY_BACK || (key == LINK_KEY_OK && armed && !startup_motion)) {
         armed = startup_motion = false;
         hold_here(link);
-    } else if (startup_motion || faulted || link->step_fault) {
+    } else if (startup_motion || fault_reason != NO_FAULT || link->step_fault) {
         return;
     } else if (level_steps < 0) {
         switch (key) {
@@ -154,10 +164,10 @@ void center_balance_key(const LinkTest *link, uint8_t key, uint32_t now)
 
 void center_balance_tick(LinkTest *link, uint32_t now)
 {
-    if (faulted || link->step_fault) { return; }
+    if (link->step_fault) { fail(link, STEP_PULSE); }
+    if (fault_reason != NO_FAULT) { return; }
     if (startup_motion && now - started_ms >= STARTUP_TIMEOUT_MS) {
-        faulted = true;
-        hold_here(link);
+        fail(link, BOOT_TIMEOUT);
         return;
     }
     if (!startup_motion && level_steps >= 0) {
@@ -168,11 +178,6 @@ void center_balance_tick(LinkTest *link, uint32_t now)
         }
         if (seen_observations != link->center_observations) {
             seen_observations = link->center_observations;
-            if (abs(link->center_error_mm) > 100) {
-                faulted = true;
-                hold_here(link);
-                return;
-            }
             if (!active || (ball.initialized &&
                     link->center_sample_ms - ball.sample_ms >= VISION_TIMEOUT_MS)) {
                 hold_here(link);
@@ -187,6 +192,7 @@ void center_balance_tick(LinkTest *link, uint32_t now)
             link_test_jog(link, forward);
         }
         last_pulse_ms = now;
+        if (link->step_fault) { fail(link, STEP_PULSE); return; }
         if (startup_motion && link->steps == target_steps) {
             if (target_steps == AXIS_MAX_STEPS) {
                 target_steps = STARTUP_LEVEL_STEPS;
@@ -203,14 +209,18 @@ void center_balance_tick(LinkTest *link, uint32_t now)
 
 void center_balance_menu(LinkTest *link, uint32_t now)
 {
-    const char *status = link->step_fault || faulted ? "BAL: S5 FAULT"
+    const char *status = link->step_fault || fault_reason != NO_FAULT ? "BAL: S5 FAULT"
         : startup_motion ? (target_steps == AXIS_MAX_STEPS ? "BAL: STARTUP UP" : "BAL: RETURN 310")
         : level_steps < 0 ? "BAL: SET LEVEL"
         : !armed ? "BAL: S4 STOPPED"
         : active && vision_ready(link, now) ? (ball.settled ? "BAL: S3 HOLD ZERO" : "BAL: S2 ZERO")
         : "BAL: S1 WAIT BALL";
     snprintf(link->startup_rows[0], 22, "%s", status);
-    if (vision_ready(link, now) && !startup_motion) {
+    if (fault_reason == STEP_PULSE || link->step_fault) {
+        snprintf(link->startup_rows[1], 22, "STEP PULSE FAIL");
+    } else if (fault_reason == BOOT_TIMEOUT) {
+        snprintf(link->startup_rows[1], 22, "STARTUP TIMEOUT");
+    } else if (vision_ready(link, now) && !startup_motion) {
         snprintf(link->startup_rows[1], 22, "X:%+d V:%+d mm/s", link->center_error_mm, link->center_velocity_mm_s);
     } else {
         snprintf(link->startup_rows[1], 22, "BACK:STOP");
