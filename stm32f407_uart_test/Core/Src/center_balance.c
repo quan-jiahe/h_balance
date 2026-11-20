@@ -15,10 +15,21 @@ enum {
 
 _Static_assert(sizeof(BalanceTuning) == 52, "SWD tuning layout changed");
 
+/* 在 VSCode 修改这些默认值，再编译并烧录即可永久生效。 */
 volatile BalanceTuning g_balance_tuning = {
-    0x42414C31u, 1u,
-    0.25f, 0.70f, 0.875f, 1.50f, 1.60f, 72.0f, 88.0f, 120.0f,
-    0.0f, 0.0f, 150.0f
+    .magic = 0x42414C31u,
+    .version = 1u,
+    .kp = 0.25f,          // 位置增益：增大时回中更积极
+    .kv = 0.70f,          // 速度阻尼：增大时抑制运动和过冲
+    .ki = 0.875f,         // 中心积分：补偿小偏差，慢摆时减小
+    .gain = 1.50f,        // 整体输出倍率
+    .brake = 1.60f,       // 提前制动时的速度增益倍率
+    .max_speed = 72.0f,   // 目标球速上限，mm/s
+    .accel = 88.0f,       // 制动距离规划加速度，mm/s²
+    .ref_accel = 120.0f,  // 目标速度上升斜率，mm/s²
+    .kff = 0.0f,          // 线性速度补偿
+    .kff2 = 0.0f,         // 平方速度补偿
+    .max_offset = 150.0f, // 相对锁存姿态的最大纠偏步数
 };
 
 typedef struct {

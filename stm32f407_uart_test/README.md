@@ -25,7 +25,18 @@
 
 也可执行 `.\stm32f407_uart_test\flash_center.ps1`。烧录命令会复位并立即开始原上电行程，开始前把机构放到底端并取出球。
 
-### ST-Link 在线调参
+### VSCode 源码调参（当前采用）
+
+在 `Core/Src/center_balance.c` 顶部修改具名 `g_balance_tuning` 默认值，重点先看 `.kp`、`.kv`、`.ki`。保存后从仓库根目录运行：
+
+```powershell
+.\tools\build_center.ps1
+.\stm32f407_uart_test\flash_center.ps1
+```
+
+编译成功后再烧录，参数随固件永久保存。无需运行在线调参工具。`magic` 和 `version` 保持不变。
+
+### ST-Link 在线调参（备用）
 
 调参程序仅使用 Python 标准库、现有 CubeProgrammer 与 ST-Link，不需要额外串口。先烧录本版，再在仓库根目录运行：
 
