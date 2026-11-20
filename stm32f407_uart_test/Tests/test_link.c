@@ -5,6 +5,8 @@
 #include "pulse_cycle.h"
 #include "startup_level.h"
 #include "balance_tuning.h"
+#include "vofa_tuning.h"
+#include "vofa_uart.h"
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,6 +20,32 @@ static bool imu_offline, imu_stale, motor_stalled;
 static int imu_noise;
 static int position, motor_sign = 1;
 static float motion_scale = 1.0f, imu_sign = 1.0f;
+
+static uint8_t tuning_rx[256], tuning_tx[80];
+static unsigned tuning_head, tuning_tail, tuning_tx_size, tuning_frames;
+static uint32_t tuning_errors;
+static bool tuning_tx_full;
+void vofa_uart_init(void)
+{
+    tuning_head = tuning_tail = tuning_tx_size = tuning_frames = 0;
+    tuning_errors = 0;
+    tuning_tx_full = false;
+}
+bool vofa_uart_read(uint8_t *byte)
+{
+    if (tuning_tail == tuning_head) { return false; }
+    *byte = tuning_rx[tuning_tail++];
+    return true;
+}
+bool vofa_uart_write(const uint8_t *data, size_t size)
+{
+    if (tuning_tx_full || size > sizeof(tuning_tx)) { return false; }
+    memcpy(tuning_tx, data, size);
+    tuning_tx_size = size;
+    ++tuning_frames;
+    return true;
+}
+uint32_t vofa_uart_errors(void) { return tuning_errors; }
 
 void SystemInit(void) { }
 
@@ -375,6 +403,102 @@ static void test_center_balance(void)
     check(g_balance_tuning.magic == 0x42414C31u && g_balance_tuning.version == 1, 24);
 }
 
+
+static float tuning_channel(unsigned index)
+{
+    float value;
+    memcpy(&value, tuning_tx + index * 4, 4);
+    return value;
+}
+static void tuning_enqueue(const char *text)
+{
+    tuning_head = (unsigned)strlen(text);
+    tuning_tail = 0;
+    memcpy(tuning_rx, text, tuning_head);
+}
+static void tuning_command(LinkTest *link, const char *text)
+{
+    tuning_enqueue(text);
+    while (tuning_tail < tuning_head) { vofa_tuning_tick(link, ++now_ms); }
+    now_ms += 50;
+    vofa_tuning_tick(link, now_ms);
+}
+static void test_vofa_tuning(void)
+{
+    LinkTest link;
+    BalanceTuning defaults = g_balance_tuning;
+    finish_center_startup(&link);
+    vofa_tuning_init();
+    tuning_enqueue("k");
+    vofa_tuning_tick(&link, ++now_ms);
+    tuning_enqueue("p=0.");
+    vofa_tuning_tick(&link, ++now_ms);
+    check(g_balance_tuning.kp == defaults.kp, 24);
+    tuning_command(&link, "6\r\n");
+    check(fabsf(g_balance_tuning.kp - 0.6f) < 0.0001f && tuning_channel(6) == 1, 24);
+    tuning_command(&link, " KV = 0.9\nki=0.1\n");
+    check(fabsf(g_balance_tuning.kv - 0.9f) < 0.0001f && fabsf(g_balance_tuning.ki - 0.1f) < 0.0001f, 24);
+    const char *bad[] = {"kp=nan\n", "kv=inf\n", "kp=-1\n", "max_offset=651\n",
+        "gain=1x\n", "magic=0\n", "dir=-1\n", "start\n", "kp=0.9;kv=1\n", "kp=\n"};
+    const BalanceTuning valid = g_balance_tuning;
+    for (unsigned i = 0; i < sizeof(bad) / sizeof(bad[0]); ++i) {
+        tuning_command(&link, bad[i]);
+        const BalanceTuning actual = g_balance_tuning;
+        check(memcmp(&valid, &actual, sizeof(valid)) == 0 && tuning_channel(6) == -1, 24);
+    }
+    char overflow[100];
+    memset(overflow, 'x', 90);
+    memcpy(overflow + 90, "kp=1\n", 6);
+    tuning_command(&link, overflow);
+    check(g_balance_tuning.kp == valid.kp && tuning_channel(6) == -1, 24);
+    tuning_enqueue("kp=");
+    vofa_tuning_tick(&link, ++now_ms);
+    now_ms += 300;
+    vofa_tuning_tick(&link, now_ms);
+    tuning_command(&link, "0.8\n");
+    check(g_balance_tuning.kp == valid.kp, 24);
+    ++tuning_errors;
+    tuning_command(&link, "kp=0.8\n");
+    check(g_balance_tuning.kp == valid.kp && tuning_channel(6) == -2, 24);
+    tuning_command(&link, "kp=0.6\n");
+    check(tuning_channel(6) == 1, 24);
+
+    const char *others[] = {"gain=1.2\n", "brake=1.8\n", "max_speed=30\n", "accel=50\n",
+        "ref_accel=60\n", "kff=-0.2\n", "kff2=-0.002\n", "max_offset=100\n"};
+    for (unsigned i = 0; i < sizeof(others) / sizeof(others[0]); ++i) {
+        tuning_command(&link, others[i]);
+        check(tuning_channel(6) == 1, 24);
+    }
+    check(g_balance_tuning.max_speed == 30 && g_balance_tuning.max_offset == 100, 24);
+    check(g_balance_tuning.kff < 0 && g_balance_tuning.kff2 < 0, 24);
+    link.center_error_mm = 12;
+    link.center_velocity_mm_s = -7;
+    link.center_valid = true;
+    now_ms += 50;
+    link.center_rx_ms = now_ms;
+    vofa_tuning_tick(&link, now_ms);
+    static const uint8_t tail[] = {0, 0, 0x80, 0x7F};
+    check(tuning_tx_size == 76 && memcmp(tuning_tx + 72, tail, 4) == 0, 24);
+    check(tuning_channel(0) == 12 && tuning_channel(1) == -7 && tuning_channel(2) == link.steps, 24);
+    check(tuning_channel(3) == center_balance_target_steps() && tuning_channel(4) == 1 && tuning_channel(5) == 1, 24);
+    memcpy((void *)0x2001E480u, tuning_tx, tuning_tx_size);
+    const unsigned sent = tuning_frames;
+    vofa_tuning_tick(&link, now_ms + 49);
+    check(tuning_frames == sent, 24);
+    tuning_tx_full = true;
+    vofa_tuning_tick(&link, now_ms + 50);
+    check(tuning_frames == sent, 24);
+    tuning_tx_full = false;
+    vofa_tuning_tick(&link, now_ms + 201);
+    check(tuning_frames == sent + 1 && tuning_channel(5) == 0, 24);
+    memset(overflow, 'x', 96);
+    overflow[96] = 0;
+    tuning_enqueue(overflow);
+    vofa_tuning_tick(&link, now_ms + 202);
+    check(tuning_tail == 32 && tuning_head == 96, 24);
+    g_balance_tuning = defaults;
+}
+
 int main(void)
 {
     LinkTest link;
@@ -457,6 +581,7 @@ int main(void)
     test_pulse_cycle();
     test_center_startup();
     test_center_balance();
+    test_vofa_tuning();
     result[2] = 0xF4072300u;
     __asm volatile ("bkpt #0");
     for (;;) { }

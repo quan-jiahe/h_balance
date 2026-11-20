@@ -415,6 +415,16 @@
               <FilePath>..\Core\Src\center_balance.c</FilePath>
             </File>
             <File>
+              <FileName>vofa_uart.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\vofa_uart.c</FilePath>
+            </File>
+            <File>
+              <FileName>vofa_tuning.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\vofa_tuning.c</FilePath>
+            </File>
+            <File>
               <FileName>center_oled.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\center_oled.c</FilePath>
@@ -434,6 +444,16 @@
         <Group>
           <GroupName>Headers</GroupName>
           <Files>
+            <File>
+              <FileName>vofa_uart.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Core\Inc\vofa_uart.h</FilePath>
+            </File>
+            <File>
+              <FileName>vofa_tuning.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Core\Inc\vofa_tuning.h</FilePath>
+            </File>
             <File>
               <FileName>balance_tuning.h</FileName>
               <FileType>5</FileType>
@@ -867,6 +887,16 @@
               <FilePath>..\Core\Src\center_balance.c</FilePath>
             </File>
             <File>
+              <FileName>vofa_uart.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\vofa_uart.c</FilePath>
+            </File>
+            <File>
+              <FileName>vofa_tuning.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\vofa_tuning.c</FilePath>
+            </File>
+            <File>
               <FileName>center_oled.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\center_oled.c</FilePath>
@@ -886,6 +916,16 @@
         <Group>
           <GroupName>Headers</GroupName>
           <Files>
+            <File>
+              <FileName>vofa_uart.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Core\Inc\vofa_uart.h</FilePath>
+            </File>
+            <File>
+              <FileName>vofa_tuning.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Core\Inc\vofa_tuning.h</FilePath>
+            </File>
             <File>
               <FileName>balance_tuning.h</FileName>
               <FileType>5</FileType>

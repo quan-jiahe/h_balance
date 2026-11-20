@@ -8,5 +8,7 @@ void center_balance_key(const LinkTest *link, uint8_t key, uint32_t now);
 void center_balance_tick(LinkTest *link, uint32_t now);
 void center_balance_menu(LinkTest *link, uint32_t now);
 int32_t center_balance_level_steps(void);
+int32_t center_balance_target_steps(void);
+uint8_t center_balance_state(const LinkTest *link, uint32_t now);
 
 #endif

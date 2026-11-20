@@ -80,9 +80,12 @@ def main():
     includes = tree.find(".//Cads/VariousControls/IncludePath")
     includes.text = ";".join(str((original.parent / part.replace("\\", "/")).resolve())
                              for part in includes.text.split(";")) + ";" + str(build)
+    # Keep the growing test harness within the installed 32 KiB linker license.
+    controls = tree.find(".//Cads/VariousControls/MiscControls")
+    controls.text = (controls.text or "") + " -Oz"
     files = tree.find(".//Group[GroupName='Application']/Files")
     for element in list(files):
-        if element.findtext("FileName") == "board.c":
+        if element.findtext("FileName") in ("board.c", "vofa_uart.c"):
             files.remove(element)
         elif element.findtext("FileName") == "main.c":
             element.find("FileName").text = "test_link.c"
@@ -138,6 +141,14 @@ def main():
     assert decoder.menu_lines[1:] == ["MOTOR:STOP", "RANGE:0-650", "STEP:+0"]
     decoder.feed(bytes(cpu.mem_read(0x2001E380, 95)))
     assert decoder.menu_lines[1:3] == ["BAL: S2 ZERO", "X:+30 V:+0 mm/s"]
+    vofa_packet = bytes(cpu.mem_read(0x2001E480, 76))
+    assert vofa_packet[-4:] == bytes.fromhex("0000807f")
+    channels = struct.unpack("<18f", vofa_packet[:-4])
+    assert channels[:2] == (12, -7) and channels[2:6] == (310, 310, 1, 1)
+    assert channels[6] == 1 and abs(channels[7] - 0.6) < 1e-5
+    assert abs(channels[8] - 0.9) < 1e-5 and abs(channels[9] - 0.1) < 1e-5
+    assert channels[12:15] == (30, 50, 60)
+    print("PASS: VOFA JustFloat 18 channels, commands, bounds, errors, timeout and nonblocking telemetry")
     print(f"PASS: {checks} C checks; real K230 packets -> C parser -> real K230 decoder")
     print("PASS: bad CRC, noise, truncated frames, key limits, tick wrap and link timeout")
     print("PASS: jog direction, one pulse per valid command, count and pulse-fault handling")

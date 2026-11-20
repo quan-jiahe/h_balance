@@ -1,5 +1,7 @@
 # STM32F407VET6 ↔ 亚博 K230 通讯与单脉冲点动
 
+最新支持 **USB转TTL + VOFA+在线调参**：PA9 TX、PA10 RX，115200/8N1，接收协议JustFloat。接线、通道与命令见 [VOFA.md](VOFA.md)。用户默认kp=0.5已保留，修改命令如 `kp=0.3` 加换行，复位后恢复源码默认值。
+
 ## 毫米位置/速度自动稳球版（2026-11-20）
 
 工作目录统一为 `C:\Users\LENOVO\Desktop\ultra\h_balance`。打开 `MDK-ARM/F407_K230_UART.uvprojx`，选择 **F407_K230_Center_Balance** Target。固件为 `Firmware/F407_K230_Center_Balance.hex`，复制 HEX 时需同时保留对应编译版本的 map 供调参使用。

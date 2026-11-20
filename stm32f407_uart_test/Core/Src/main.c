@@ -3,6 +3,7 @@
 #ifdef F407_CENTER_BALANCE
 #include "center_balance.h"
 #include "center_oled.h"
+#include "vofa_tuning.h"
 #else
 #include "pulse_cycle.h"
 #endif
@@ -18,6 +19,7 @@ int main(void)
 #ifdef F407_CENTER_BALANCE
     center_oled_init();
     center_balance_init();
+    vofa_tuning_init();
 #else
     pulse_cycle_init(board_millis());
 #endif
@@ -46,6 +48,7 @@ int main(void)
         const uint32_t now_ms = board_millis();
 #ifdef F407_CENTER_BALANCE
         center_balance_tick(&link, now_ms);
+        vofa_tuning_tick(&link, now_ms);
 #else
         pulse_cycle_tick(&link, now_ms, 0);
 #endif

@@ -4,6 +4,9 @@
 
 ## 工程现状
 
+- 当前调参方式为USB转3.3V TTL + VOFA+，USART1 PA9 TX、PA10 RX，115200/8N1。K230仍为USART3 PD8/PD9。JustFloat每50 ms发18个通道，ASCII name=value加换行修改RAM参数，命令状态看通道6。只接收参数指令，不增加串口启动电机或写Flash命令。用户最新默认kp=0.5已保留。说明见 `stm32f407_uart_test/VOFA.md`。已执行187项Cortex-M检查（既有Python检查上次为23项），本次用户要求停止额外验证，之后仅生成发布HEX，真实TTL/VOFA交互未实测。
+
+
 - 用户选择在 VSCode 直接修改 `Core/Src/center_balance.c` 的具名 `g_balance_tuning` 参数，重新编译烧录后永久生效。以源码调参为主要方式，在线工具仅保留备用。
 
 

@@ -19,7 +19,7 @@ _Static_assert(sizeof(BalanceTuning) == 52, "SWD tuning layout changed");
 volatile BalanceTuning g_balance_tuning = {
     .magic = 0x42414C31u,
     .version = 1u,
-    .kp = 0.25f,          // 位置增益：增大时回中更积极
+    .kp = 0.5f,          // 位置增益：增大时回中更积极
     .kv = 0.70f,          // 速度阻尼：增大时抑制运动和过冲
     .ki = 0.875f,         // 中心积分：补偿小偏差，慢摆时减小
     .gain = 1.50f,        // 整体输出倍率
@@ -129,6 +129,16 @@ static void update_target(const LinkTest *link)
 }
 
 int32_t center_balance_level_steps(void) { return level_steps; }
+int32_t center_balance_target_steps(void) { return target_steps; }
+
+uint8_t center_balance_state(const LinkTest *link, uint32_t now)
+{
+    if (link->step_fault || fault_reason != NO_FAULT) { return 5; }
+    if (startup_motion || level_steps < 0) { return 0; }
+    if (!armed) { return 4; }
+    if (active && vision_ready(link, now)) { return ball.settled ? 3 : 2; }
+    return 1;
+}
 
 void center_balance_init(void)
 {
@@ -220,11 +230,12 @@ void center_balance_tick(LinkTest *link, uint32_t now)
 
 void center_balance_menu(LinkTest *link, uint32_t now)
 {
-    const char *status = link->step_fault || fault_reason != NO_FAULT ? "BAL: S5 FAULT"
+    const uint8_t state = center_balance_state(link, now);
+    const char *status = state == 5 ? "BAL: S5 FAULT"
         : startup_motion ? (target_steps == AXIS_MAX_STEPS ? "BAL: STARTUP UP" : "BAL: RETURN 310")
         : level_steps < 0 ? "BAL: SET LEVEL"
-        : !armed ? "BAL: S4 STOPPED"
-        : active && vision_ready(link, now) ? (ball.settled ? "BAL: S3 HOLD ZERO" : "BAL: S2 ZERO")
+        : state == 4 ? "BAL: S4 STOPPED"
+        : state == 2 || state == 3 ? (state == 3 ? "BAL: S3 HOLD ZERO" : "BAL: S2 ZERO")
         : "BAL: S1 WAIT BALL";
     snprintf(link->startup_rows[0], 22, "%s", status);
     if (fault_reason == STEP_PULSE || link->step_fault) {

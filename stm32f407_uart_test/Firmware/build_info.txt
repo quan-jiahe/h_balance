@@ -61,3 +61,11 @@ S5 reports STEP PULSE FAIL or STARTUP TIMEOUT; stable motor position remains lat
 AC6.24: 0 errors, 0 warnings; Code=11920 RO-data=684 RW-data=60 ZI-data=1548
 153 Cortex-M checks and 23 Python checks pass; physical flashing NOT performed
 SHA256: 65aee1c42b7ed8038ea69e359a3efb86d0157eb907f3092398f86e0f7c023a93
+
+Firmware update: 2026-11-20 USART1 VOFA tuning
+PA9 TX / PA10 RX AF7, 115200 8N1; K230 USART3 unchanged
+JustFloat: 18 channels, 20 Hz; ASCII name=value commands with bounded values and numeric acknowledgement
+Preserved user default kp=0.5, axis sign, stable-position latch and continuous correction beyond ball marks
+AC6.24 center target: 0 errors, 0 warnings; Code=15852 RO-data=1056 RW-data=60 ZI-data=2028
+187 Cortex-M protocol/control checks passed before user requested no more validation. Physical TTL interaction not performed
+SHA256: e0f59d07d53c07ed47df2204ff750b1883d8f8fd59d0090c100e938a639ce3af
