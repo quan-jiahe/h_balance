@@ -85,3 +85,10 @@ Code=16652 RO-data=1100 RW-data=60 ZI-data=2068; HEX=17816 bytes at 0x08000000..
 HEX checksums and Reset/SysTick/USART1/USART3 vectors verified. 47 GPIO and 187 existing Cortex-M checks passed.
 Physical: startup and user I/O on this revision await hardware verification.
 SHA256: 154e182cd5c61a987547308004c7e84822280e4924e77bc247ccbbf78f11a200
+
+Firmware: F407_Board_IO_Demo.hex
+Keil AC6.7 with local compatibility options: 0 errors, 0 warnings.
+HEX=1744 bytes at 0x08000000..0x080006CF. Checksums and Reset/SysTick vectors verified.
+15 Cortex-M checks cover default LEDs off, each key, release, and combinations. No motor STEP timer start was observed.
+Physical: expansion board test awaits hardware verification.
+SHA256: d9f7bdf7919684e31b770e5b9d548c266fdb3fd4b1822a5d319214033dd8b77b

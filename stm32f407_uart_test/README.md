@@ -11,6 +11,20 @@
 
 主循环已调用 `board_buttons_poll()`，按下与释放均消抖 20 ms。包含 `board.h` 后，可用 `board_button_is_pressed(BOARD_SW1)` 读取消抖后的状态，用 `board_button_take_press(BOARD_SW1)` 读取并清除一次按下事件。长按只产生一次事件，每个按键最多保留一个待读事件。LED 用 `board_led_set(BOARD_LED3, true)` 点亮，传 `false` 熄灭。LED1 和 LED2 是固定供电指示灯。
 
+### 独立按键灯测试
+
+打开 Keil 工程 `MDK-ARM/F407_K230_UART.uvprojx`，选择 **F407_Board_IO_Demo** 目标编译。可直接烧录 `Firmware/F407_Board_IO_Demo.hex`。
+
+| 按住 | 点亮 |
+| --- | --- |
+| SW1 | LED3 |
+| SW2 | LED4 |
+| SW3 | LED5 |
+| SW4 | LED3 + LED4 |
+| SW5 | LED4 + LED5 |
+
+松开后对应灯熄灭。同时按多个键时，亮灯组合叠加。测试上电默认三灯熄灭，独立运行，无需 K230。
+
 ## 毫米位置/速度自动稳球版（2026-11-20）
 
 工作目录统一为 `C:\Users\LENOVO\Desktop\ultra\h_balance`。打开 `MDK-ARM/F407_K230_UART.uvprojx`，选择 **F407_K230_Center_Balance** Target。固件为 `Firmware/F407_K230_Center_Balance.hex`，复制 HEX 时需同时保留对应编译版本的 map 供调参使用。
