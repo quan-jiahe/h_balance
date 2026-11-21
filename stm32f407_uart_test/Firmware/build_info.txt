@@ -160,3 +160,23 @@ MODE2 waits for SW4 after confirmation. MODE3 starts on fresh vision after confi
 Keil AC6.7: 0 errors, 0 warnings. 415 control/protocol checks and 28 Python tests passed.
 The MODE2 sequence and MODE3 recovery/edge cases were verified in simulation. Combined firmware hardware timing remains unmeasured.
 SHA256: 38403f3be95d60e718b8fda74b7f09a88ff0268ccaae89b29bb97f59c17f52a6
+
+Local VOFA tuning build based on merge 03d9cd1 (MODE2 and MODE3).
+Validated RAM writes (I6=1), readback (I7..I17), parameter validation and both modes with 415 Cortex-M checks.
+Keil AC6.24: 0 errors, 0 warnings. Code=20872 RO-data=1860 RW-data=60 ZI-data=3308.
+Physical flashing, serial parameter writes and competition timings remain unverified.
+SHA256: 19ad006c6a68729d9292273576b44c61611c25809b129c29fd7f836c6147d3bb
+
+MODE2 SW4 starts on the confirmed mode without a ball-position or vision gate.
+Run timing starts on the SW4 edge. The first correction uses the next valid ball observation.
+Keil AC6.24: 0 errors, 0 warnings. 416 Cortex-M checks passed, including start outside 5 mm and start without vision.
+SHA256: b887ef32561e8842d568432828b736538fddb0ccfefc2926cf31c95b1d64ca68
+
+MODE2 starts automatically on the first fresh valid coordinate after SW3 confirms the mode.
+There is no SW4 start or segment/total timeout stop. Each point holds continuously within 8 mm for 1.8 s.
+Keil AC6.24: 0 errors, 0 warnings. 419 Cortex-M checks passed. Three simulated runs completed in 14.652, 17.556 and 21.252 s.
+SHA256: d15bfff4a160c0f5b06a39d1f691bb0e3d025426cc4f9360264c1cce931d31c9
+
+OLED orientation for viewing from above: SSD1306 segment and COM scan remapped by 180 degrees.
+Keil AC6.24: 0 errors, 0 warnings. Physical OLED orientation remains to be checked.
+SHA256: 55b45bf41655215b2f714e812611b8f9a696b548f0d0ef9e8ff6525a897804f6

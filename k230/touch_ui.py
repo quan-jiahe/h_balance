@@ -7,6 +7,9 @@ from machine import TOUCH
 from media.display import Display
 from pipe_calibration import PIPE_TICK_X, PIPE_TICK_MM
 
+DISPLAY_WIDTH = 640
+DISPLAY_HEIGHT = 480
+ROTATE_DISPLAY_180 = True
 PREVIEW_WIDTH = 448
 PREVIEW_HEIGHT = 336
 ALIGN_LINE_Y = 150  # Preview Y=0..335, increases downward.
@@ -21,19 +24,34 @@ class TouchMenu:
         self.last_lines = None
         self.last_status = None
         self.jog_ready = False
+        self.rotate_180 = ROTATE_DISPLAY_180
         lv.init()
         self.font = lv.font_load("A:/sdcard/balance_ui_20.fnt")
         if self.font is None:
             raise RuntimeError("Missing balance_ui_20.fnt font file")
-        self.display = lv.disp_create(640, 480)
+        self.display = lv.disp_create(DISPLAY_WIDTH, DISPLAY_HEIGHT)
         # LVGL must render 32-bit pixels into the BGRA8888 image buffers.
         self.display.set_color_format(lv.COLOR_FORMAT.ARGB8888)
-        self.buffers = [image.Image(640, 480, image.BGRA8888) for _ in range(2)]
+        self.buffers = [image.Image(DISPLAY_WIDTH, DISPLAY_HEIGHT, image.BGRA8888) for _ in range(2)]
         for buffer in self.buffers:
             buffer.clear()
         # Keep the bytearray wrappers alive while LVGL holds their raw pointers.
         self.draw_buffers = [buffer.bytearray() for buffer in self.buffers]
         self.front_buffer = self.buffers[0]
+        if self.rotate_180:
+            import cv2
+            from ulab import numpy as np
+
+            # Rotate complete BGRA pixels into a separate image before the normal LCD flush.
+            self.rotated_buffer = image.Image(DISPLAY_WIDTH, DISPLAY_HEIGHT, image.BGRA8888)
+            self.rotated_pixels = self.rotated_buffer.bytearray()
+            shape = (DISPLAY_HEIGHT, DISPLAY_WIDTH, 4)
+            self.draw_pixels = [np.frombuffer(raw, dtype=np.uint8).reshape(shape) for raw in self.draw_buffers]
+            self.flip_pixels = cv2.flip
+            self.frombuffer = np.frombuffer
+            self.preview_pixel_type = np.uint16
+            self.camera_preview = image.Image(PREVIEW_WIDTH, PREVIEW_HEIGHT, image.RGB565)
+            self.camera_pixels = self.camera_preview.bytearray()
         self.display.set_draw_buffers(
             self.draw_buffers[0], self.draw_buffers[1],
             self.buffers[0].size(), lv.DISP_RENDER_MODE.FULL,
@@ -113,9 +131,13 @@ class TouchMenu:
     def _flush(self, driver, area, color):
         try:
             address = uctypes.addressof(color.__dereference__())
-            for buffer in self.buffers:
+            for index, buffer in enumerate(self.buffers):
                 if buffer.virtaddr() == address:
                     self.front_buffer = buffer
+                    if self.rotate_180:
+                        rotated = self.flip_pixels(self.draw_pixels[index], -1)
+                        self.rotated_pixels[:] = rotated.tobytes()
+                        buffer = self.rotated_buffer
                     Display.show_image(buffer, layer=Display.LAYER_OSD0)
                     break
             else:
@@ -130,22 +152,37 @@ class TouchMenu:
         if points:
             point = points[0]
             x, y = point.x, point.y
+            if self.rotate_180:
+                x, y = DISPLAY_WIDTH - 1 - x, DISPLAY_HEIGHT - 1 - y
             if point.event in (TOUCH.EVENT_DOWN, TOUCH.EVENT_MOVE):
                 state = lv.INDEV_STATE.PRESSED
         data.point = lv.point_t({"x": x, "y": y})
         data.state = state
 
     def update(self, lines, observation_status, connected, frame, box):
-        frame.draw_line(0, ALIGN_LINE_Y, PREVIEW_WIDTH - 1, ALIGN_LINE_Y,
+        pixels = frame.bytearray()
+        if len(pixels) != len(self.preview_data):
+            raise ValueError("Preview frame size must be 448x336 RGB565")
+        line_y = ALIGN_LINE_Y
+        if self.rotate_180:
+            # Counter-rotate the preview so the LCD shows the camera in its original orientation.
+            camera = self.frombuffer(pixels, dtype=self.preview_pixel_type)
+            self.camera_pixels[:] = camera[::-1].copy().tobytes()
+            frame = self.camera_preview
+            pixels = self.camera_pixels
+            line_y = PREVIEW_HEIGHT - 1 - line_y
+        frame.draw_line(0, line_y, PREVIEW_WIDTH - 1, line_y,
                         color=(255, 0, 0), thickness=2)
         for index, x in enumerate(PIPE_TICK_X):
             x = round(x)
+            if self.rotate_180:
+                x = PREVIEW_WIDTH - 1 - x
             value = 10 - index
             color = (255, 255, 0) if value == 0 else (0, 255, 255)
-            frame.draw_line(x, ALIGN_LINE_Y - 7, x, ALIGN_LINE_Y + 9,
+            frame.draw_line(x, line_y - 7, x, line_y + 9,
                             color=color, thickness=1)
             label = "%+d" % value if value else "0"
-            label_y = ALIGN_LINE_Y - 48 + (index % 2) * 20
+            label_y = line_y - 48 + (index % 2) * 20
             frame.draw_string_advanced(x - 10, label_y, 16, label, color=color)
         if box is not None:
             x, y, width, height = box
@@ -153,11 +190,13 @@ class TouchMenu:
             y1 = max(0, min(PREVIEW_HEIGHT - 1, round(y * PREVIEW_HEIGHT / 480)))
             x2 = max(x1 + 1, min(PREVIEW_WIDTH, round((x + width) * PREVIEW_WIDTH / 640)))
             y2 = max(y1 + 1, min(PREVIEW_HEIGHT, round((y + height) * PREVIEW_HEIGHT / 480)))
+            cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+            if self.rotate_180:
+                x1, x2 = PREVIEW_WIDTH - x2, PREVIEW_WIDTH - x1
+                y1, y2 = PREVIEW_HEIGHT - y2, PREVIEW_HEIGHT - y1
+                cx, cy = PREVIEW_WIDTH - 1 - cx, PREVIEW_HEIGHT - 1 - cy
             frame.draw_rectangle(x1, y1, x2 - x1, y2 - y1, color=(0, 255, 0), thickness=2)
-            frame.draw_cross((x1 + x2) // 2, (y1 + y2) // 2, color=(255, 255, 0), size=8)
-        pixels = frame.bytearray()
-        if len(pixels) != len(self.preview_data):
-            raise ValueError("Preview frame size must be 448x336 RGB565")
+            frame.draw_cross(cx, cy, color=(255, 255, 0), size=8)
         self.preview_data[:] = pixels
         self.preview.invalidate()
         observation_status = {

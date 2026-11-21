@@ -1,5 +1,6 @@
 """Regression checks for the LVGL draw format, double buffering and touch callbacks."""
 
+from array import array
 import importlib.util
 from pathlib import Path
 import sys
@@ -10,7 +11,11 @@ from unittest.mock import Mock, patch
 
 class Buffer:
     def __init__(self, width, height, pixel_format):
-        self.data = bytearray(width * height * 4)
+        self.data = bytearray(width * height * (2 if pixel_format == 9 else 4))
+        self.draw_line = Mock()
+        self.draw_rectangle = Mock()
+        self.draw_cross = Mock()
+        self.draw_string_advanced = Mock()
 
     def clear(self):
         pass
@@ -54,12 +59,37 @@ class DisplayTests(unittest.TestCase):
         touch_factory.EVENT_DOWN = 2
         touch_factory.EVENT_MOVE = 3
         self.display = SimpleNamespace(show_image=Mock(), LAYER_OSD0=4)
+
+        def frombuffer(data, *, dtype):
+            if dtype == 2:
+                return WordPixels(data)
+            self.assertEqual(dtype, 1)
+            return SimpleNamespace(reshape=lambda shape: SimpleNamespace(data=data, shape=shape))
+
+        class WordPixels:
+            def __init__(self, data):
+                self.words = array("H")
+                self.words.frombytes(data)
+
+            def __getitem__(self, key):
+                return SimpleNamespace(copy=lambda: self.words[key])
+
+        def flip(pixels, code):
+            self.assertEqual(pixels.shape, (480, 640, 4))
+            self.assertEqual(code, -1)
+            words = array("I")
+            words.frombytes(pixels.data)
+            words.reverse()
+            return words
+
         modules = {
-            "image": SimpleNamespace(Image=Buffer, BGRA8888=17),
+            "image": SimpleNamespace(Image=Buffer, BGRA8888=17, RGB565=9),
             "lvgl": self.lv, "uctypes": SimpleNamespace(addressof=id),
             "machine": SimpleNamespace(TOUCH=touch_factory),
             "media": SimpleNamespace(__path__=[]),
             "media.display": SimpleNamespace(Display=self.display),
+            "cv2": SimpleNamespace(flip=flip),
+            "ulab": SimpleNamespace(numpy=SimpleNamespace(frombuffer=frombuffer, uint8=1, uint16=2)),
         }
         path = Path(__file__).resolve().parents[1] / "k230" / "touch_ui.py"
         spec = importlib.util.spec_from_file_location("display_under_test", path)
@@ -67,9 +97,9 @@ class DisplayTests(unittest.TestCase):
         with patch.dict(sys.modules, modules), patch.object(
                 sys, "path", [str(path.parent)] + sys.path):
             spec.loader.exec_module(module)
-        self.sent = []
+            self.sent = []
+            self.ui = module.TouchMenu(self.sent.append)
         self.module = module
-        self.ui = module.TouchMenu(self.sent.append)
 
     def test_draw_format_buffers_and_actual_flushed_pointer(self):
         self.driver.set_color_format.assert_called_once_with(17)
@@ -82,14 +112,37 @@ class DisplayTests(unittest.TestCase):
         self.lv.font_load.assert_called_once_with("A:/sdcard/balance_ui_20.fnt")
         self.screen.set_style_text_font.assert_called_once_with(self.ui.font, 0)
         self.screen.set_style_bg_opa.assert_called_once_with(255, 0)
-        for buffer in self.ui.buffers:
+        for index, buffer in enumerate(self.ui.buffers):
+            width, height = self.module.DISPLAY_WIDTH, self.module.DISPLAY_HEIGHT
+            marks = ((0, 0), (width - 1, 0), (0, height - 1), (width - 1, height - 1), (17, 211))
+            for n, (x, y) in enumerate(marks):
+                offset = (y * width + x) * 4
+                buffer.data[offset:offset + 4] = bytes((n + 1 + 10 * index, 20 + n, 90, 255))
+            original = bytes(buffer.data)
             self.ui._flush(self.driver, None, SimpleNamespace(__dereference__=lambda: buffer.data))
-            self.assertIs(self.display.show_image.call_args.args[0], buffer)
+            output = self.display.show_image.call_args.args[0]
+            self.assertIs(output, self.ui.rotated_buffer)
             self.assertEqual(self.display.show_image.call_args.kwargs, {"layer": 4})
             self.assertIs(self.ui.front_buffer, buffer)
+            self.assertEqual(buffer.data, original)
+            for x, y in marks:
+                offset = (y * width + x) * 4
+                rotated = ((height - 1 - y) * width + width - 1 - x) * 4
+                self.assertEqual(output.data[rotated:rotated + 4], original[offset:offset + 4])
         with self.assertRaises(RuntimeError):
             self.ui._flush(self.driver, None, SimpleNamespace(__dereference__=lambda: b"unknown"))
         self.assertEqual(self.driver.flush_ready.call_count, 3)
+
+    def test_normal_orientation_uses_the_original_buffer_and_touch(self):
+        with patch.object(self.module, "ROTATE_DISPLAY_180", False):
+            ui = self.module.TouchMenu(self.sent.append)
+            buffer = ui.buffers[0]
+            ui._flush(self.driver, None, SimpleNamespace(__dereference__=lambda: buffer.data))
+            self.display.show_image.assert_called_once_with(buffer, layer=4)
+            data = SimpleNamespace()
+            self.touch.read.return_value = [SimpleNamespace(x=40, y=410, event=2)]
+            ui._read_touch(None, data)
+            self.assertEqual(data.point, {"x": 40, "y": 410})
 
     def test_button_bindings_and_touch_release(self):
         self.assertEqual(len(self.buttons), 6)
@@ -101,7 +154,7 @@ class DisplayTests(unittest.TestCase):
         data = SimpleNamespace()
         self.touch.read.return_value = [SimpleNamespace(x=40, y=410, event=2)]
         self.ui._read_touch(None, data)
-        self.assertEqual((data.point, data.state), ({"x": 40, "y": 410}, 1))
+        self.assertEqual((data.point, data.state), ({"x": 599, "y": 69}, 1))
         self.touch.read.return_value = []
         self.ui._read_touch(None, data)
         self.assertEqual(data.state, 0)
@@ -169,40 +222,50 @@ class DisplayTests(unittest.TestCase):
         self.assertEqual(self.ui.last_help, "BACK:STOP")
 
     def test_preview_pixels_overlay_scaling_and_no_ball_refresh(self):
-        frame = Mock()
-        frame.bytearray.return_value = bytes([0x12]) * (448 * 336 * 2)
+        source = Buffer(448, 336, 9)
+        source.data[:4] = b"\x12\x34\x56\x78"
+        source.data[-4:] = b"\x89\xab\xcd\xef"
         self.ui.update(["a", "b", "c", "d"], "YOLO: NO BALL\nCALIBRATION PENDING", True,
-                       frame, (100, 200, 40, 20))
-        y = self.module.ALIGN_LINE_Y
+                       source, (100, 200, 40, 20))
+        frame = self.ui.camera_preview
+        y = 335 - self.module.ALIGN_LINE_Y
         frame.draw_line.assert_any_call(0, y, 447, y, color=(255, 0, 0), thickness=2)
-        frame.draw_rectangle.assert_called_once_with(70, 140, 28, 14, color=(0, 255, 0), thickness=2)
-        frame.draw_cross.assert_called_once_with(84, 147, color=(255, 255, 0), size=8)
+        frame.draw_rectangle.assert_called_once_with(350, 182, 28, 14, color=(0, 255, 0), thickness=2)
+        frame.draw_cross.assert_called_once_with(363, 188, color=(255, 255, 0), size=8)
         self.assertEqual(len(self.module.PIPE_TICK_X), 21)
         self.assertEqual(self.module.PIPE_TICK_MM, 10)
         self.assertTrue(all(a < b for a, b in zip(self.module.PIPE_TICK_X, self.module.PIPE_TICK_X[1:])))
         self.assertEqual(frame.draw_line.call_count, 22)
         labels = [call.args[3] for call in frame.draw_string_advanced.call_args_list]
         self.assertEqual(labels, [str(v) if v <= 0 else "+%d" % v for v in range(10, -11, -1)])
-        self.assertEqual(self.ui.preview_data, frame.bytearray.return_value)
+        for x, tick, label in zip(self.module.PIPE_TICK_X, frame.draw_line.call_args_list[1:],
+                                  frame.draw_string_advanced.call_args_list):
+            self.assertEqual(tick.args[0], 447 - round(x))
+            self.assertEqual(tick.args[0], label.args[0] + 10)
+        self.assertEqual(self.ui.preview_data[:4], b"\xcd\xef\x89\xab")
+        self.assertEqual(self.ui.preview_data[-4:], b"\x56\x78\x12\x34")
+        source.draw_line.assert_not_called()
         self.assertEqual(self.ui.preview_descriptor["header"]["cf"], 9)
         self.ui.preview.set_src.assert_called_once_with(self.ui.preview_descriptor)
         self.ui.preview.invalidate.assert_called_once_with()
-        frame.reset_mock()
-        self.ui.update(["a", "b", "c", "d"], "YOLO: NO BALL", False, frame, None)
+        frame.draw_line.reset_mock()
+        frame.draw_rectangle.reset_mock()
+        frame.draw_cross.reset_mock()
+        self.ui.update(["a", "b", "c", "d"], "YOLO: NO BALL", False, source, None)
         frame.draw_line.assert_any_call(0, y, 447, y, color=(255, 0, 0), thickness=2)
         frame.draw_rectangle.assert_not_called()
         frame.draw_cross.assert_not_called()
         self.assertEqual(self.ui.preview.invalidate.call_count, 2)
-        frame.bytearray.return_value = b"bad size"
+        source.data = b"bad size"
         with self.assertRaises(ValueError):
-            self.ui.update(["a", "b", "c", "d"], "", False, frame, None)
+            self.ui.update(["a", "b", "c", "d"], "", False, source, None)
 
     def test_alignment_line_position_and_bounds(self):
         frame = Mock()
         frame.bytearray.return_value = bytes(448 * 336 * 2)
         with patch.object(self.module, "ALIGN_LINE_Y", 100):
             self.ui.update(["", "", "", ""], "STOPPED - LOST", False, frame, None)
-        frame.draw_line.assert_any_call(0, 100, 447, 100, color=(255, 0, 0), thickness=2)
+        self.ui.camera_preview.draw_line.assert_any_call(0, 235, 447, 235, color=(255, 0, 0), thickness=2)
         for y in (-1, 336, 1.5):
             with self.subTest(y=y), patch.object(self.module, "ALIGN_LINE_Y", y):
                 with self.assertRaises(ValueError):

@@ -53,15 +53,14 @@ static uint32_t seen_observations, last_pulse_ms, started_ms;
 static int32_t target_steps, level_steps, anchor_steps;
 static bool startup_motion, armed, active;
 static BalanceMode selected_mode, confirmed_mode;
-enum { MODE2_START_TOL_MM = 5, MODE2_HOLD_TOL_MM = 8,
-       MODE2_LEG_LIMIT_MS = 7000, MODE2_HOLD_MS = 1500, MODE2_TOTAL_LIMIT_MS = 30000 };
+enum { MODE2_HOLD_TOL_MM = 8, MODE2_HOLD_MS = 1800 };
 typedef enum {
-    THREE_WAIT_START, THREE_MOVE, THREE_HOLD, THREE_DONE, THREE_TIMEOUT, THREE_STOP
+    THREE_WAIT_BALL, THREE_MOVE, THREE_HOLD, THREE_DONE, THREE_STOP
 } ThreePointPhase;
 static struct {
     ThreePointPhase phase;
     unsigned leg;
-    uint32_t pressed_ms, leg_started_ms, hold_started_ms;
+    uint32_t hold_started_ms;
 } sequence;
 static const int16_t three_targets_mm[] = {-50, 50, 0};
 static struct {
@@ -88,24 +87,17 @@ static bool three_points_running(void)
     return sequence.phase == THREE_MOVE || sequence.phase == THREE_HOLD;
 }
 
-static bool three_points_start_ready(const LinkTest *link, uint32_t now)
-{
-    return vision_ready(link, now) && abs(link->center_error_mm) <= MODE2_START_TOL_MM;
-}
-
 const char *center_balance_three_point_status(const LinkTest *link, uint32_t now)
 {
     static const char *const moving[] = {"P1 MOVE", "P2 MOVE", "O MOVE"};
     static const char *const holding[] = {"P1 HOLD", "P2 HOLD", "O HOLD"};
     static const char *const lost[] = {"P1 LOST", "P2 LOST", "O LOST"};
-    static const char *const timed_out[] = {"P1 TIMEOUT", "P2 TIMEOUT", "O TIMEOUT"};
     switch (sequence.phase) {
     case THREE_MOVE: return vision_ready(link, now) ? moving[sequence.leg] : lost[sequence.leg];
     case THREE_HOLD: return holding[sequence.leg];
     case THREE_DONE: return "O DONE";
-    case THREE_TIMEOUT: return timed_out[sequence.leg];
     case THREE_STOP: return "STOP";
-    default: return three_points_start_ready(link, now) ? "O PRESS START" : "PLACE AT O";
+    default: return "WAIT BALL";
     }
 }
 
@@ -149,7 +141,6 @@ static bool three_points_observe(const LinkTest *link, uint32_t now)
     } else if (sequence.phase == THREE_HOLD && now - sequence.hold_started_ms >= MODE2_HOLD_MS) {
         if (sequence.leg + 1 < sizeof(three_targets_mm) / sizeof(three_targets_mm[0])) {
             ++sequence.leg;
-            sequence.leg_started_ms = now;
             sequence.phase = THREE_MOVE;
             hold_here(link);
             return true;
@@ -157,23 +148,6 @@ static bool three_points_observe(const LinkTest *link, uint32_t now)
         sequence.phase = THREE_DONE;
     }
     return false;
-}
-
-static bool three_points_within_time(const LinkTest *link, uint32_t now)
-{
-    if (now - sequence.pressed_ms <= MODE2_TOTAL_LIMIT_MS
-        && (sequence.phase == THREE_HOLD || now - sequence.leg_started_ms <= MODE2_LEG_LIMIT_MS)) {
-        return true;
-    }
-    sequence.phase = THREE_TIMEOUT;
-    armed = false;
-    hold_here(link);
-    return false;
-}
-
-static bool starts_on_confirmation(BalanceMode mode)
-{
-    return mode == BALANCE_MODE_CENTER || mode == BALANCE_MODE_DISTURBANCE;
 }
 
 static void mode3_vision_gap(void)
@@ -371,7 +345,7 @@ void center_balance_init(void)
     fault_reason = NO_FAULT;
     selected_mode = BALANCE_MODE_CENTER;
     confirmed_mode = BALANCE_MODE_NONE;
-    sequence.phase = THREE_WAIT_START;
+    sequence.phase = THREE_WAIT_BALL;
     sequence.leg = 0;
     armed = false;
     startup_motion = true;
@@ -385,7 +359,7 @@ void center_balance_key(const LinkTest *link, uint8_t key, uint32_t now)
 {
     (void)now;
     if (key == LINK_KEY_BACK || (key == LINK_KEY_OK && armed && !startup_motion
-                                && starts_on_confirmation(confirmed_mode))) {
+                                && confirmed_mode != BALANCE_MODE_THREE_POINTS)) {
         if (confirmed_mode == BALANCE_MODE_THREE_POINTS && armed) { sequence.phase = THREE_STOP; }
         armed = startup_motion = false;
         hold_here(link);
@@ -413,7 +387,7 @@ void center_balance_key(const LinkTest *link, uint8_t key, uint32_t now)
     }
 }
 
-void center_balance_button(const LinkTest *link, BoardButton button, uint32_t pressed_ms)
+void center_balance_button(const LinkTest *link, BoardButton button)
 {
     if (three_points_running()) { return; }
     if (button == BOARD_SW1) {
@@ -425,21 +399,11 @@ void center_balance_button(const LinkTest *link, BoardButton button, uint32_t pr
         if (armed && selected_mode == confirmed_mode) { return; }
         hold_here(link);
         confirmed_mode = selected_mode;
-        sequence.phase = THREE_WAIT_START;
-        armed = starts_on_confirmation(confirmed_mode);
+        sequence.phase = THREE_WAIT_BALL;
+        armed = confirmed_mode != BALANCE_MODE_RESERVED;
         mode3.phase = M3_CENTER;
         mode3.pin_position = 0;
         mode3.entered = mode3.edge = mode3.edge_output = false;
-        seen_observations = link->center_observations;
-    } else if (button == BOARD_SW4 && confirmed_mode == BALANCE_MODE_THREE_POINTS
-               && selected_mode == confirmed_mode && !startup_motion && level_steps >= 0
-               && fault_reason == NO_FAULT && !link->step_fault
-               && three_points_start_ready(link, board_millis())) {
-        hold_here(link);
-        sequence.leg = 0;
-        sequence.pressed_ms = sequence.leg_started_ms = pressed_ms;
-        sequence.phase = THREE_MOVE;
-        armed = true;
         seen_observations = link->center_observations;
     }
 }
@@ -454,12 +418,11 @@ void center_balance_tick(LinkTest *link, uint32_t now)
     }
     if (!startup_motion && level_steps >= 0) {
         if (!armed) { return; }
-        const bool running = three_points_running();
+        bool running = three_points_running();
         const bool ready = vision_ready(link, now);
         const bool sample_gap = ball.initialized
             && link->center_sample_ms - ball.sample_ms >= VISION_TIMEOUT_MS;
         if (running && (!ready || sample_gap)) { sequence.phase = THREE_MOVE; }
-        if (running && !three_points_within_time(link, now)) { return; }
         if (!ready) {
             if (active) {
                 mode3_vision_gap();
@@ -473,10 +436,12 @@ void center_balance_tick(LinkTest *link, uint32_t now)
                 mode3_vision_gap();
                 hold_here(link);
             }
-            if (running) {
-                if (three_points_observe(link, now)) { return; }
-                if (three_points_running() && !three_points_within_time(link, now)) { return; }
+            if (confirmed_mode == BALANCE_MODE_THREE_POINTS && sequence.phase == THREE_WAIT_BALL) {
+                sequence.leg = 0;
+                sequence.phase = THREE_MOVE;
+                running = true;
             }
+            if (running && three_points_observe(link, now)) { return; }
             active = true;
             if (confirmed_mode == BALANCE_MODE_DISTURBANCE) { mode3_observe(link); }
             update_target(link, running ? three_targets_mm[sequence.leg] : 0);

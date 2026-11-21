@@ -107,7 +107,8 @@ static void probe_display(uint32_t now)
 #else
         0x8D, 0x14, 0x20, 0x02,  /* SSD1306 internal charge pump and page addressing. */
 #endif
-        0xA1, 0xC8, 0xDA, 0x12, 0x81, 0x7F,
+        0xA0, 0xC0,  /* Rotate the panel 180 degrees for viewing from above. */
+        0xDA, 0x12, 0x81, 0x7F,
 #if defined(F407_OLED_SH1106)
         0xD9, 0x22, 0xDB, 0x35,
 #elif defined(F407_OLED_SSD1309)
