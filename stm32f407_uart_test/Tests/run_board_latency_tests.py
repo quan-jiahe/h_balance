@@ -27,6 +27,9 @@ def main():
             node.text = str((original.parent / node.text.replace('\\', '/')).resolve())
     include = tree.find('.//Cads/VariousControls/IncludePath')
     include.text = ';'.join(str((original.parent / x.replace('\\', '/')).resolve()) for x in include.text.split(';'))
+    controls = tree.find('.//Cads/VariousControls/MiscControls')
+    # Unicorn's memory hooks can resume with stale IT state around a timed register read.
+    controls.text += ' -mrestrict-it'
     files = tree.find(".//Group[GroupName='Application']/Files")
     for node in list(files):
         if node.findtext('FileName') == 'main.c':

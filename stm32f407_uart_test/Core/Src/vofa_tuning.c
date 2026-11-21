@@ -24,12 +24,12 @@ static bool discard_line;
 static int command_status;
 static uint32_t last_byte_ms, last_frame_ms, seen_errors;
 
-static volatile float *value_at(const Parameter *p)
+static float value_at(const Parameter *p)
 {
-    return (volatile float *)((volatile uint8_t *)&g_balance_tuning + p->offset);
+    return *(const volatile float *)((const volatile uint8_t *)&g_balance_tuning + p->offset);
 }
 
-static bool apply_command(void)
+static bool valid_parameter_command(void)
 {
     char *name = line;
     while (isspace((unsigned char)*name)) { ++name; }
@@ -48,7 +48,6 @@ static bool apply_command(void)
     for (unsigned i = 0; i < PARAM_COUNT; ++i) {
         const Parameter *p = &parameters[i];
         if (strcmp(name, p->name) == 0 && value >= p->low && value <= p->high) {
-            *value_at(p) = value;
             return true;
         }
     }
@@ -85,7 +84,7 @@ void vofa_tuning_tick(const LinkTest *link, uint32_t now)
         if (byte == '\n' || byte == '\r') {
             if (!discard_line && used) {
                 line[used] = 0;
-                command_status = apply_command() ? 1 : -1;
+                command_status = valid_parameter_command() ? -3 : -1;
             }
             used = 0;
             discard_line = false;
@@ -106,7 +105,7 @@ void vofa_tuning_tick(const LinkTest *link, uint32_t now)
         center_balance_target_steps(), center_balance_state(link, now),
         link->center_valid && now - link->center_rx_ms < 180u, command_status
     };
-    for (unsigned i = 0; i < PARAM_COUNT; ++i) { channels[7 + i] = *value_at(&parameters[i]); }
+    for (unsigned i = 0; i < PARAM_COUNT; ++i) { channels[7 + i] = value_at(&parameters[i]); }
     uint8_t packet[sizeof(channels) + 4];
     static const uint8_t tail[] = {0, 0, 0x80, 0x7F};
     memcpy(packet, channels, sizeof(channels));

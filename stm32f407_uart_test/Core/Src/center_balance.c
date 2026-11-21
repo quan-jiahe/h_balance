@@ -24,8 +24,8 @@ volatile BalanceTuning g_balance_tuning = {
     .ki = 0.875f,         // 姿态学习速率；设0暂停学习，保留已有补偿
     .gain = 1.50f,        // 动态纠偏及学习速率倍率，不缩放已学补偿
     .brake = 1.60f,       // 提前制动时的速度增益倍率
-    .max_speed = 72.0f,   // 目标球速上限，mm/s
-    .accel = 88.0f,       // 制动距离规划加速度，mm/s²
+    .max_speed = 30.0f,   // 目标球速上限，mm/s
+    .accel = 40.0f,       // 制动距离规划加速度，mm/s²
     .ref_accel = 120.0f,  // 目标速度上升斜率，mm/s²
     .kff = 0.0f,          // 线性速度补偿
     .kff2 = 0.0f,         // 平方速度补偿
@@ -43,6 +43,7 @@ static BallController ball;
 static uint32_t seen_observations, last_pulse_ms, started_ms;
 static int32_t target_steps, level_steps, anchor_steps;
 static bool startup_motion, armed, active;
+static BalanceMode selected_mode, confirmed_mode;
 typedef enum { NO_FAULT, BOOT_TIMEOUT, STEP_PULSE } FaultReason;
 static FaultReason fault_reason;
 
@@ -170,13 +171,19 @@ uint8_t center_balance_state(const LinkTest *link, uint32_t now)
     return 1;
 }
 
+BalanceMode center_balance_selected_mode(void) { return selected_mode; }
+bool center_balance_mode_confirmed(void) { return selected_mode == confirmed_mode; }
+
 void center_balance_init(void)
 {
     ball = (BallController){0};
     anchor_steps = 0;
     active = false;
     fault_reason = NO_FAULT;
-    armed = startup_motion = true;
+    selected_mode = BALANCE_MODE_CENTER;
+    confirmed_mode = BALANCE_MODE_NONE;
+    armed = false;
+    startup_motion = true;
     target_steps = AXIS_MAX_STEPS;
     level_steps = -1;
     seen_observations = last_pulse_ms = 0;
@@ -201,16 +208,32 @@ void center_balance_key(const LinkTest *link, uint8_t key, uint32_t now)
             if (link->steps == target_steps && link->steps > 0 && link->steps < AXIS_MAX_STEPS) {
                 level_steps = link->steps;
                 start_here(link);
-                armed = true;
                 seen_observations = link->center_observations;
             }
             break;
         default: break;
         }
-    } else if (key == LINK_KEY_OK) {
+    } else if (key == LINK_KEY_OK && confirmed_mode == BALANCE_MODE_CENTER) {
         hold_here(link);
         armed = true;
         seen_observations = link->center_observations;
+    }
+}
+
+void center_balance_button(const LinkTest *link, BoardButton button)
+{
+    if (button == BOARD_SW1) {
+        selected_mode = selected_mode == BALANCE_MODE_RESERVED ? BALANCE_MODE_CENTER : selected_mode + 1;
+    } else if (button == BOARD_SW2) {
+        selected_mode = selected_mode == BALANCE_MODE_CENTER ? BALANCE_MODE_RESERVED : selected_mode - 1;
+    } else if (button == BOARD_SW3 && !startup_motion && level_steps >= 0
+               && fault_reason == NO_FAULT && !link->step_fault) {
+        if (armed && selected_mode == confirmed_mode) { return; }
+        hold_here(link);
+        confirmed_mode = selected_mode;
+        armed = confirmed_mode == BALANCE_MODE_CENTER;
+        seen_observations = link->center_observations;
+
     }
 }
 
@@ -265,6 +288,8 @@ void center_balance_menu(LinkTest *link, uint32_t now)
     const char *status = state == 5 ? "BAL: S5 FAULT"
         : startup_motion ? (target_steps == AXIS_MAX_STEPS ? "BAL: STARTUP UP" : "BAL: RETURN 310")
         : level_steps < 0 ? "BAL: SET LEVEL"
+        : !confirmed_mode ? "BAL: CONFIRM MODE"
+        : confirmed_mode != BALANCE_MODE_CENTER ? "BAL: MODE RESERVED"
         : state == 4 ? "BAL: S4 STOPPED"
         : state == 2 || state == 3 ? (state == 3 ? "BAL: S3 HOLD ZERO" : "BAL: S2 ZERO")
         : "BAL: S1 WAIT BALL";

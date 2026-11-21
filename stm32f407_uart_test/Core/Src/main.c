@@ -48,6 +48,11 @@ int main(void)
         const uint32_t now_ms = board_millis();
         board_buttons_poll(now_ms);
 #ifdef F407_CENTER_BALANCE
+        for (BoardButton button = BOARD_SW1; button <= BOARD_SW3; ++button) {
+            if (board_button_take_press(button)) {
+                center_balance_button(&link, button);
+            }
+        }
         center_balance_tick(&link, now_ms);
         vofa_tuning_tick(&link, now_ms);
 #else

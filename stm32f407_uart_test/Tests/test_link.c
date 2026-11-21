@@ -279,7 +279,7 @@ static void feed_center(LinkTest *link, const uint8_t *source, uint32_t sample_m
     center_balance_tick(link, now_ms);
 }
 
-static void finish_center_startup(LinkTest *link)
+static void park_center_startup(LinkTest *link)
 {
     now_ms = 0;
     pulse_count = up_pulses = 0;
@@ -290,17 +290,51 @@ static void finish_center_startup(LinkTest *link)
         center_balance_tick(link, ++now_ms);
     }
 }
+static void finish_center_startup(LinkTest *link)
+{
+    park_center_startup(link);
+    center_balance_button(link, BOARD_SW3);
+}
+
 static void test_center_startup(void)
 {
     LinkTest link;
-    finish_center_startup(&link);
+    park_center_startup(&link);
     center_balance_menu(&link, now_ms);
     check(link.steps == 310 && pulse_count == 990 && up_pulses == 650, 24);
-    check(strcmp(link.startup_rows[0], "BAL: S1 WAIT BALL") == 0, 24);
+    check(strcmp(link.startup_rows[0], "BAL: CONFIRM MODE") == 0, 24);
     check(strstr(link.startup_rows[1], "DIR") == 0, 24);
     const unsigned done = pulse_count;
+    feed_center(&link, fixture_center_right, 100);
     for (unsigned i = 0; i < 250; ++i) { center_balance_tick(&link, ++now_ms); }
-    check(pulse_count == done, 24);
+    check(pulse_count == done && !center_balance_mode_confirmed(), 24);
+    center_balance_button(&link, BOARD_SW2);
+    check(center_balance_selected_mode() == BALANCE_MODE_RESERVED, 24);
+    center_balance_button(&link, BOARD_SW1);
+    check(center_balance_selected_mode() == BALANCE_MODE_CENTER, 24);
+    center_balance_button(&link, BOARD_SW1);
+    center_balance_button(&link, BOARD_SW3);
+    check(center_balance_mode_confirmed() && center_balance_selected_mode() == BALANCE_MODE_THREE_POINTS, 24);
+    feed_center(&link, fixture_center_right, 200);
+    check(pulse_count == done && center_balance_target_steps() == 310, 24);
+    center_balance_button(&link, BOARD_SW1);
+    center_balance_button(&link, BOARD_SW3);
+    feed_center(&link, fixture_center_left, 300);
+    check(center_balance_mode_confirmed() && center_balance_selected_mode() == BALANCE_MODE_DISTURBANCE
+          && pulse_count == done, 24);
+    center_balance_button(&link, BOARD_SW2);
+    center_balance_button(&link, BOARD_SW2);
+    center_balance_button(&link, BOARD_SW4);
+    feed_center(&link, fixture_center_right, 400);
+    check(!center_balance_mode_confirmed() && pulse_count == done, 24);
+    center_balance_button(&link, BOARD_SW3);
+    center_balance_tick(&link, ++now_ms);
+    check(center_balance_state(&link, now_ms) == 1 && pulse_count == done, 24);
+    feed_center(&link, fixture_center_right, 500);
+    check(center_balance_state(&link, now_ms) == 2 && center_balance_target_steps() < 310, 24);
+    center_balance_button(&link, BOARD_SW1);
+    center_balance_button(&link, BOARD_SW3);
+    check(center_balance_target_steps() == link.steps && center_balance_state(&link, now_ms) == 4, 24);
     now_ms = 0;
     link_test_init(&link);
     center_balance_init();
@@ -394,6 +428,7 @@ static void test_center_balance(void)
         link.steps = end ? 640 : 10;
         center_balance_key(&link, LINK_KEY_BACK, now_ms);
         center_balance_key(&link, LINK_KEY_OK, now_ms);
+        center_balance_button(&link, BOARD_SW3);
         pulse_count = 0;
         for (uint32_t t = 4000; t < 4800; t += 33) {
             feed_center(&link, end ? fixture_center_left : fixture_center_right, t);
@@ -499,6 +534,7 @@ static void test_center_stall_integral(void)
         link.steps = anchor;
         center_balance_key(&link, LINK_KEY_BACK, now_ms);
         center_balance_key(&link, LINK_KEY_OK, now_ms);
+        center_balance_button(&link, BOARD_SW3);
         for (unsigned i = 0; i < 60; ++i) { observe_ball(&link, limit == 2 ? -30 : 30, 0); }
         check(center_balance_target_steps() == (limit == 1 ? 0 : (limit == 2 ? 650 : 290)), 24);
         g_balance_tuning.kp = 0;
@@ -569,6 +605,7 @@ static void test_center_saturation_recovery(void)
         link.steps = anchor;
         center_balance_key(&link, LINK_KEY_BACK, now_ms);
         center_balance_key(&link, LINK_KEY_OK, now_ms);
+        center_balance_button(&link, BOARD_SW3);
         g_balance_tuning.max_offset = limit ? 100 : 20;
         const int x = limit == 2 ? -30 : 30;
         for (unsigned i = 0; i < 120; ++i) { observe_ball(&link, x, 0); }
@@ -768,9 +805,9 @@ static void test_vofa_tuning(void)
     vofa_tuning_tick(&link, ++now_ms);
     check(g_balance_tuning.kp == defaults.kp, 24);
     tuning_command(&link, "6\r\n");
-    check(fabsf(g_balance_tuning.kp - 0.6f) < 0.0001f && tuning_channel(6) == 1, 24);
+    check(g_balance_tuning.kp == defaults.kp && tuning_channel(6) == -3, 24);
     tuning_command(&link, " KV = 0.9\nki=0.1\n");
-    check(fabsf(g_balance_tuning.kv - 0.9f) < 0.0001f && fabsf(g_balance_tuning.ki - 0.1f) < 0.0001f, 24);
+    check(g_balance_tuning.kv == defaults.kv && g_balance_tuning.ki == defaults.ki && tuning_channel(6) == -3, 24);
     const char *bad[] = {"kp=nan\n", "kv=inf\n", "kp=-1\n", "max_offset=651\n",
         "gain=1x\n", "magic=0\n", "dir=-1\n", "start\n", "kp=0.9;kv=1\n", "kp=\n"};
     const BalanceTuning valid = g_balance_tuning;
@@ -794,16 +831,16 @@ static void test_vofa_tuning(void)
     tuning_command(&link, "kp=0.8\n");
     check(g_balance_tuning.kp == valid.kp && tuning_channel(6) == -2, 24);
     tuning_command(&link, "kp=0.6\n");
-    check(tuning_channel(6) == 1, 24);
+    check(tuning_channel(6) == -3, 24);
 
     const char *others[] = {"gain=1.2\n", "brake=1.8\n", "max_speed=30\n", "accel=50\n",
         "ref_accel=60\n", "kff=-0.2\n", "kff2=-0.002\n", "max_offset=100\n"};
     for (unsigned i = 0; i < sizeof(others) / sizeof(others[0]); ++i) {
         tuning_command(&link, others[i]);
-        check(tuning_channel(6) == 1, 24);
+        check(tuning_channel(6) == -3, 24);
     }
-    check(g_balance_tuning.max_speed == 30 && g_balance_tuning.max_offset == 100, 24);
-    check(g_balance_tuning.kff < 0 && g_balance_tuning.kff2 < 0, 24);
+    check(g_balance_tuning.max_speed == 30 && g_balance_tuning.accel == 40 && g_balance_tuning.max_offset == 150, 24);
+    check(g_balance_tuning.kff == 0 && g_balance_tuning.kff2 == 0, 24);
     link.center_error_mm = 12;
     link.center_velocity_mm_s = -7;
     link.center_valid = true;

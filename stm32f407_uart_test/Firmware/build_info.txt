@@ -130,3 +130,12 @@ Offline 33 ms/0.5 Hz velocity-estimator phase delay: 150.68 -> 49.50 ms, not rea
 AC6.24: 0 errors, 0 warnings; Code=16860 RO-data=1060 RW-data=60 ZI-data=2348
 No automatic deployment, flashing, online tuning or real timing measurement performed
 SHA256: 55650be78410186a4ff05f3e46ce1f1fd7ef24950d5ca54dc5076f1cbc079c90
+
+Firmware update: 2026-11-21 OLED mode menu and confirmed start
+SW1/SW2 browse modes, SW3 confirms. Mode 1 consumes fresh valid ball observations after confirmation.
+Modes 2 and 3 display Chinese names. Mode 4 is reserved. Only mode 1 runs closed-loop control.
+Locked the 11 VOFA parameters at the S3 snapshot, including max_speed=30 and accel=40. Parameter writes return I6=-3.
+Keil AC6.7: 0 errors, 0 warnings. 358 control/protocol checks, 519 virtual-register checks and 28 Python regressions passed.
+The register-test build restricts Thumb IT blocks for Unicorn. The release build uses the project's standard optimization.
+Physical buttons, OLED and motor response on the new firmware have not been tested.
+SHA256: e6f3c1c2ed1be9bb0653cbe26331f3160b0378b7ad7fc6ee3284622ca72a36b2

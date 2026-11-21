@@ -6,10 +6,11 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+#include "center_oled_modes.h"
 
 #define SCL (1u << 8)
 #define SDA (1u << 9)
-enum { WIDTH = 128, PAGES = 8, CHUNK = 8, ANGLE_PAGE = 3,
+enum { WIDTH = 128, PAGES = 8, CHUNK = 8, ANGLE_PAGE = 3, DISPLAY_PAGES = 4,
        OLED_POWER_UP_MS = 100, OLED_RETRY_MS = 250,
        SETTLE_MS = 250, IMU_PERIOD_MS = 25, ZERO_SAMPLES = 8 };
 
@@ -26,7 +27,7 @@ static float sum, zero_angle, angle;
 static uint32_t level_since, last_sample, last_good, next_chunk, frame_start;
 static unsigned page, column;
 static bool clearing;
-static uint8_t angle_line[WIDTH];
+static uint8_t frame[DISPLAY_PAGES][WIDTH], displayed[DISPLAY_PAGES][WIDTH];
 
 static void delay_half_bit(void)
 {
@@ -176,8 +177,11 @@ static const uint8_t glyphs[][5] = {
     {0x01,0x01,0x7f,0x01,0x01}, {0x3f,0x40,0x38,0x40,0x3f},
     {0x61,0x51,0x49,0x45,0x43}, {0x08,0x08,0x3e,0x08,0x08},
     {0x08,0x08,0x08,0x08,0x08}, {0,0x60,0x60,0,0},
+    {0x7f,0x08,0x08,0x08,0x7f}, {0x7f,0x09,0x09,0x09,0x06},
+    {0x3f,0x40,0x40,0x40,0x3f}, {0x07,0x08,0x70,0x08,0x07},
+    {0x7f,0x08,0x14,0x22,0x41}, {0x03,0x1c,0x60,0x1c,0x03},
 };
-static const char glyph_keys[] = "0123456789ABCDEFGILMNORSTWZ+-.";
+static const char glyph_keys[] = "0123456789ABCDEFGILMNORSTWZ+-.HPUYKV";
 
 static void draw_line(uint8_t *line, const char *text)
 {
@@ -188,20 +192,36 @@ static void draw_line(uint8_t *line, const char *text)
     }
 }
 
-static void make_frame(uint32_t now)
+static void make_frame(const LinkTest *link, uint32_t now)
 {
     char line[22];
+    const BalanceMode mode = center_balance_selected_mode();
+    const uint8_t state = center_balance_state(link, now);
+    const char *status = state == 5 ? "FAULT" : state == 0 ? "STARTUP"
+        : !center_balance_mode_confirmed() ? "CONFIRM"
+        : mode != BALANCE_MODE_CENTER ? "RESERVED"
+        : state == 4 ? "STOP" : state == 3 ? "HOLD" : state == 2 ? "RUN" : "WAIT BALL";
+    snprintf(line, sizeof(line), "MODE%u %s", (unsigned)mode, status);
+    draw_line(frame[0], line);
+    memset(frame[1], 0, WIDTH);
+    memset(frame[2], 0, WIDTH);
+    if (mode == BALANCE_MODE_THREE_POINTS || mode == BALANCE_MODE_DISTURBANCE) {
+        const unsigned label = mode - BALANCE_MODE_THREE_POINTS;
+        for (unsigned row = 0; row < 2; ++row) {
+            memcpy(frame[1 + row] + (WIDTH - MODE_LABEL_WIDTH) / 2, mode_labels[label][row], MODE_LABEL_WIDTH);
+        }
+    }
     if (!imu_ready || now - last_good > 200u) {
-        draw_line(angle_line, "ANGLE IMU ERR");
+        draw_line(frame[ANGLE_PAGE], "ANGLE IMU ERR");
     } else if (!zeroed) {
-        draw_line(angle_line, "ANGLE WAIT ZERO");
+        draw_line(frame[ANGLE_PAGE], "ANGLE WAIT ZERO");
     } else {
         const float scaled = angle * 100.0f;
         const int hundredths = (int)(scaled + (scaled < 0.0f ? -0.5f : 0.5f));
         const unsigned magnitude = (unsigned)(hundredths < 0 ? -hundredths : hundredths);
         snprintf(line, sizeof(line), "ANGLE %c%u.%02u DEG",
                  hundredths < 0 ? '-' : ' ', magnitude / 100u, magnitude % 100u);
-        draw_line(angle_line, line);
+        draw_line(frame[ANGLE_PAGE], line);
     }
 }
 
@@ -214,27 +234,38 @@ void center_oled_tick(const LinkTest *link, uint32_t now)
     }
     update_angle(link, now);
     if ((int32_t)(now - next_chunk) < 0) { return; }
-    if (!clearing && column == 0) {
-        if (now - frame_start < 250u) { return; }
+    if (!clearing && page == 0 && column == 0) {
+        if (now - frame_start < 125u) { return; }
         frame_start = now;
-        make_frame(now);
+        make_frame(link, now);
+    }
+    if (!clearing) {
+        /* Skip unchanged bytes without consuming any time on the I2C bus. */
+        while (!memcmp(frame[page] + column, displayed[page] + column, CHUNK)) {
+            column += CHUNK;
+            if (column == WIDTH) {
+                column = 0;
+                if (++page == DISPLAY_PAGES) { page = 0; return; }
+            }
+        }
     }
     const unsigned ram_column = column + COLUMN_OFFSET;
     const uint8_t command[] = {
         (uint8_t)(0xB0u | page), (uint8_t)(ram_column & 15u),
         (uint8_t)(0x10u | (ram_column >> 4))
     };
-    const uint8_t *data = clearing ? blank : angle_line + column;
+    const uint8_t *data = clearing ? blank : frame[page] + column;
     next_chunk = now + 8u;
     if (!oled_write(0, command, sizeof(command)) || !oled_write(0x40, data, CHUNK)) {
         next_chunk = now + 250u;
         return;
     }
+    if (!clearing) { memcpy(displayed[page] + column, data, CHUNK); }
     column += CHUNK;
     if (column < WIDTH) { return; }
     column = 0;
-    if (clearing && ++page < PAGES) { return; }
-    page = ANGLE_PAGE;
+    if (++page < (clearing ? PAGES : DISPLAY_PAGES)) { return; }
+    page = 0;
     clearing = false;
 }
 #endif

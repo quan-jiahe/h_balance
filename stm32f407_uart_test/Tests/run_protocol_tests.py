@@ -154,10 +154,10 @@ def main():
     assert vofa_packet[-4:] == bytes.fromhex("0000807f")
     channels = struct.unpack("<18f", vofa_packet[:-4])
     assert channels[:2] == (12, -7) and channels[2:6] == (310, 310, 1, 1)
-    assert channels[6] == 1 and abs(channels[7] - 0.6) < 1e-5
-    assert abs(channels[8] - 0.9) < 1e-5 and abs(channels[9] - 0.1) < 1e-5
-    assert channels[12:15] == (30, 50, 60)
-    print("PASS: VOFA JustFloat 18 channels, commands, bounds, errors, timeout and nonblocking telemetry")
+    assert channels[6] == -3 and abs(channels[7] - 0.5) < 1e-5
+    assert abs(channels[8] - 0.7) < 1e-5 and abs(channels[9] - 0.875) < 1e-5
+    assert channels[12:15] == (30, 40, 120)
+    print("PASS: VOFA JustFloat 18 channels, parameter lock, bounds, errors, timeout and nonblocking telemetry")
     print(f"PASS: {checks} C checks; real K230 packets -> C parser -> real K230 decoder")
     print("PASS: bad CRC, noise, truncated frames, key limits, tick wrap and link timeout")
     print("PASS: jog direction, one pulse per valid command, count and pulse-fault handling")
@@ -166,7 +166,7 @@ def main():
     print("PASS: mm auto-centering, supplied velocity, fixed sign, latched position, STOP, loss and timeout")
     print("PASS: stalled-ball ramp, zero-crossing/STOP/loss continuity, frozen learning and saturation recovery")
     print("PASS: six idealized mechanical models, 66 ms vision delay, unknown equilibrium, kick and tilt change")
-    print("PASS: startup travel 0 -> 650 -> configured level, vision handoff and cancel")
+    print("PASS: startup travel 0 -> 650 -> configured level, mode confirmation, fresh vision handoff and cancel")
 
 
 if __name__ == "__main__":
