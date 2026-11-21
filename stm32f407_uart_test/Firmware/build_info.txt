@@ -138,10 +138,25 @@ Locked the 11 VOFA parameters at the S3 snapshot, including max_speed=30 and acc
 Keil AC6.7: 0 errors, 0 warnings. 358 control/protocol checks, 519 virtual-register checks and 28 Python regressions passed.
 The register-test build restricts Thumb IT blocks for Unicorn. The release build uses the project's standard optimization.
 Physical buttons, OLED and motor response on the new firmware have not been tested.
-SHA256: 39ff2b1e6f1f8e3a700eec81118b548772338e3ca8416a2d094a3f7639ea2865
+SHA256: e6f3c1c2ed1be9bb0653cbe26331f3160b0378b7ad7fc6ee3284622ca72a36b2
 
 Local MODE2 build: SW4 starts O -> P1 (-50 mm) -> P2 (+50 mm) -> O.
 Confirmed start within 5 mm of O. Segment deadline 7 s; hold 1.5 s within 8 mm; overall deadline 30 s.
 Keil AC6.7: 0 errors, 0 warnings. 383 control/protocol checks, 522 virtual-register checks and 28 Python tests passed.
 Three simulated runs completed in 13.53, 16.73 and 20.36 s; slowest segment 6.501 s. Real travel and hold accuracy await testing.
 SHA256: 082658c694f67950a8086558547f974fe10abe5200483f3fb113384f48cec281
+
+Firmware update: MODE3 disturbance recovery and travel protection
+MODE3 learns the center pose, detects a 25..35 mm stationary hold of at least 800 ms and estimates release from subsequent motion.
+Checks 12 mm recovery within 6 s and 8 mm hold from 6 to 8 s. Latches timeout, drift, loss or observed boundary crossing.
+Brakes at 90 mm, or earlier using projected stopping distance. Retains 0..650 steps, max_offset and 4 ms pulse spacing.
+390 Cortex-M checks passed. With 66 ms modeled image delay, the -35 mm and +25 mm cases recovered in 1.414 s and 0.898 s; hold peaks 3.44 and 1.77 mm.
+Both modeled edge approaches from 86 mm at 24 mm/s peaked at 93.35 mm. Physical release timing, calibration and braking remain unverified.
+Keil AC6.24: 0 errors, 0 warnings. Code=19296 RO-data=1672 RW-data=60 ZI-data=3268.
+SHA256: 1bdef27999b2f4a4b271c72acdcb8651719b9121a7b767324678c7fb7be71505
+
+Local combined firmware: MODE2 three-point holding plus MODE3 from commit 2b2a657.
+MODE2 waits for SW4 after confirmation. MODE3 starts on fresh vision after confirmation.
+Keil AC6.7: 0 errors, 0 warnings. 415 control/protocol checks and 28 Python tests passed.
+The MODE2 sequence and MODE3 recovery/edge cases were verified in simulation. Combined firmware hardware timing remains unmeasured.
+SHA256: 38403f3be95d60e718b8fda74b7f09a88ff0268ccaae89b29bb97f59c17f52a6

@@ -131,6 +131,10 @@ def main():
         print('MODE2 case=%d move_ms=(%.0f, %.0f, %.0f) done_ms=%.0f reached=%g peak_abs_x=%.2f' %
               (index, *values))
     assert done == 0xF4072300, "C test did not finish"
+    for side in range(2):
+        entered_ms, hold_peak, edge_peak = struct.unpack('<3f', cpu.mem_read(0x2001EA40 + side * 12, 12))
+        print('MODE3 side=%s entry_ms=%.0f hold_peak_mm=%.2f edge_peak_mm=%.2f'
+              % ('-' if side == 0 else '+', entered_ms, hold_peak, edge_peak))
     assert failures == 0, f"C test failure bitmask: {failures:#x}, first failed check: {first_failure}"
     (build / 'adaptive_model_results.json').write_text(json.dumps(model_results, indent=2))
     decoder = k230.Commands()
