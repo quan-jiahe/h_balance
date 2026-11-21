@@ -6,8 +6,8 @@
 
 enum {
     AXIS_MAX_STEPS = 650, STARTUP_LEVEL_STEPS = 310,
-    COARSE_JOG_STEPS = 25, MAX_COMMAND_CHANGE = 8,
-    PULSE_INTERVAL_MS = 8, VISION_TIMEOUT_MS = 180,
+    COARSE_JOG_STEPS = 25, MAX_COMMAND_CHANGE = 12,
+    PULSE_INTERVAL_MS = 4, VISION_TIMEOUT_MS = 180,
     STARTUP_TIMEOUT_MS = 20000, FIXED_MOTOR_SIGN = -1,
     /* DIR=-1 was measured with right-positive pixels; mm is left-positive. */
     MM_AXIS_SIGN = -1, MOTOR_MM_SIGN = FIXED_MOTOR_SIGN * MM_AXIS_SIGN
@@ -21,8 +21,8 @@ volatile BalanceTuning g_balance_tuning = {
     .version = 1u,
     .kp = 0.5f,          // 位置增益：增大时回中更积极
     .kv = 0.70f,          // 速度阻尼：增大时抑制运动和过冲
-    .ki = 0.875f,         // 中心积分：补偿小偏差，慢摆时减小
-    .gain = 1.50f,        // 整体输出倍率
+    .ki = 0.875f,         // 姿态学习速率；设0暂停学习，保留已有补偿
+    .gain = 1.50f,        // 动态纠偏及学习速率倍率，不缩放已学补偿
     .brake = 1.60f,       // 提前制动时的速度增益倍率
     .max_speed = 72.0f,   // 目标球速上限，mm/s
     .accel = 88.0f,       // 制动距离规划加速度，mm/s²
@@ -32,8 +32,9 @@ volatile BalanceTuning g_balance_tuning = {
     .max_offset = 150.0f, // 相对锁存姿态的最大纠偏步数
 };
 
+/* Integral is stored in output steps, so live gain changes preserve the learned pose. */
 typedef struct {
-    float reference, integral, previous_error, demand;
+    float reference, integral, demand, stalled_seconds, stable_seconds;
     uint32_t sample_ms;
     bool initialized, settled, braking;
 } BallController;
@@ -62,9 +63,18 @@ static int32_t bounded_target(int32_t step)
 
 static void hold_here(const LinkTest *link)
 {
-    target_steps = anchor_steps = link->steps;
-    ball = (BallController){0};
+    target_steps = link->steps;
+    ball.reference = ball.stalled_seconds = ball.stable_seconds = 0.0f;
+    ball.demand = MOTOR_MM_SIGN * (link->steps - anchor_steps);
+    ball.initialized = ball.settled = false;
     active = false;
+}
+
+static void start_here(const LinkTest *link)
+{
+    anchor_steps = link->steps; /* Starting pose, not a measured horizontal pose. */
+    ball = (BallController){0};
+    hold_here(link);
 }
 
 static void fail(const LinkTest *link, FaultReason reason)
@@ -87,14 +97,19 @@ static void update_target(const LinkTest *link)
     }
     ball.sample_ms = link->center_sample_ms;
     ball.initialized = true;
-    ball.settled = ball.settled ? distance < 4.0f && speed < 10.0f
-                               : distance <= 2.0f && speed <= 4.0f;
-    if (ball.settled) {
-        /* Latch the actual pulse position; 310 is never a balance return target. */
-        target_steps = anchor_steps = link->steps;
+    const bool near_zero = ball.settled ? distance < 4.0f && speed < 10.0f
+                                       : distance <= 2.0f && speed <= 4.0f;
+    ball.stable_seconds = near_zero ? fminf(0.3f, ball.stable_seconds + dt) : 0.0f;
+    if (!near_zero) { ball.settled = false; }
+    if (!ball.settled && ball.stable_seconds >= 0.3f && link->steps == target_steps) {
+        /* Transfer the complete held output into the origin without a target jump. */
+        anchor_steps = target_steps;
         ball.reference = ball.integral = ball.demand = 0.0f;
-        ball.previous_error = error;
+        ball.stalled_seconds = 0.0f;
         ball.braking = false;
+        ball.settled = true;
+    }
+    if (ball.settled) {
         return;
     }
     const float direction = error > 0.0f ? 1.0f : (error < 0.0f ? -1.0f : 0.0f);
@@ -110,22 +125,37 @@ static void update_target(const LinkTest *link)
     const float toward = velocity * direction;
     const float stopping_distance = toward * toward / (2.0f * acceleration);
     ball.braking = toward > 0.0f && stopping_distance >= distance * (ball.braking ? 0.55f : 0.85f);
-    if (error * ball.previous_error < 0.0f) { ball.integral *= 0.25f; }
-    if (distance < 10.0f && speed < 14.0f && !ball.braking) {
-        ball.integral = clamp(ball.integral + g_balance_tuning.ki * error * dt, -6.0f, 6.0f);
-    } else {
-        ball.integral *= 0.92f;
+    ball.stalled_seconds = distance >= 10.0f && toward <= 4.0f && !ball.braking
+        ? fminf(0.3f, ball.stalled_seconds + dt) : 0.0f;
+    const float gain = g_balance_tuning.gain;
+    const float integral_limit = g_balance_tuning.max_offset;
+    ball.integral = clamp(ball.integral, -integral_limit, integral_limit);
+    const float previous_integral = ball.integral;
+    if (!ball.braking && ((distance < 10.0f && speed < 14.0f) || ball.stalled_seconds >= 0.3f)) {
+        /* Bound the ramp rate independently of how far the ball is from zero. */
+        ball.integral = clamp(ball.integral + gain * g_balance_tuning.ki * clamp(error, -10.0f, 10.0f) * dt,
+            -integral_limit, integral_limit);
     }
     const float kv = g_balance_tuning.kv * (ball.braking ? g_balance_tuning.brake : 1.0f);
-    float demand = g_balance_tuning.gain * (g_balance_tuning.kp * error
-        + kv * (ball.reference - velocity) + ball.integral)
+    const float base = gain * (g_balance_tuning.kp * error + kv * (ball.reference - velocity))
         + g_balance_tuning.kff * velocity + g_balance_tuning.kff2 * velocity * speed;
-    demand = clamp(demand, -g_balance_tuning.max_offset, g_balance_tuning.max_offset);
-    const float physical = clamp(anchor_steps + MOTOR_MM_SIGN * demand, 0.0f, AXIS_MAX_STEPS);
-    demand = MOTOR_MM_SIGN * (physical - anchor_steps);
+    const float end0 = MOTOR_MM_SIGN * -anchor_steps;
+    const float end1 = MOTOR_MM_SIGN * (AXIS_MAX_STEPS - anchor_steps);
+    const float low = fmaxf(-g_balance_tuning.max_offset, fminf(end0, end1));
+    const float high = fminf(g_balance_tuning.max_offset, fmaxf(end0, end1));
+    float demand = base + ball.integral;
+    const float integral_change = ball.integral - previous_integral;
+    const float applied = MOTOR_MM_SIGN * (link->steps - anchor_steps);
+    /* Do not accumulate further into either the command or mechanical limit. */
+    if ((demand > high && integral_change > 0.0f)
+            || (demand < low && integral_change < 0.0f)
+            || (fabsf(ball.demand - applied) > MAX_COMMAND_CHANGE && (demand - applied) * integral_change > 0.0f)) {
+        ball.integral = previous_integral;
+        demand = base + ball.integral;
+    }
+    demand = clamp(demand, low, high);
     ball.demand += clamp(demand - ball.demand, -MAX_COMMAND_CHANGE, MAX_COMMAND_CHANGE);
     target_steps = bounded_target(anchor_steps + MOTOR_MM_SIGN * (int32_t)lroundf(ball.demand));
-    ball.previous_error = error;
 }
 
 int32_t center_balance_level_steps(void) { return level_steps; }
@@ -143,6 +173,7 @@ uint8_t center_balance_state(const LinkTest *link, uint32_t now)
 void center_balance_init(void)
 {
     ball = (BallController){0};
+    anchor_steps = 0;
     active = false;
     fault_reason = NO_FAULT;
     armed = startup_motion = true;
@@ -169,7 +200,7 @@ void center_balance_key(const LinkTest *link, uint8_t key, uint32_t now)
         case LINK_KEY_OK:
             if (link->steps == target_steps && link->steps > 0 && link->steps < AXIS_MAX_STEPS) {
                 level_steps = link->steps;
-                hold_here(link);
+                start_here(link);
                 armed = true;
                 seen_observations = link->center_observations;
             }
@@ -220,7 +251,7 @@ void center_balance_tick(LinkTest *link, uint32_t now)
             } else {
                 level_steps = STARTUP_LEVEL_STEPS; /* Display/IMU reference only. */
                 startup_motion = false;
-                hold_here(link);
+                start_here(link);
                 seen_observations = link->center_observations;
                 link->center_valid = false;
             }

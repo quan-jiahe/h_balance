@@ -33,6 +33,7 @@ Objects/
 Listings/
 *.uvguix.*
 *.uvoptx
+!stm32f407_uart_test/MDK-ARM/F407_K230_UART.uvoptx
 *.build_log.htm
 /stm32f407_uart_test/MDK-ARM/DebugConfig/
 /stm32f407_uart_test/MDK-ARM/RTE/

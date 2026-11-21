@@ -11,6 +11,8 @@ WIDTH = 640
 HEIGHT = 480
 BAUDRATE = 115200
 FRAME_PERIOD_MS = 20
+VELOCITY_SAMPLES = 5
+VELOCITY_WINDOW_MS = 120
 
 # Fill these only after measuring the real camera/platform geometry.
 X_ZERO_PX = None
@@ -63,7 +65,8 @@ class BallTracker:
     def reset(self):
         self.last_x = None
         self.velocity = 0.0
-        self.filtered_x = None
+        self.sample_ms = 0
+        self.samples = []
 
     def update(self, detection, elapsed_ms, zero_px=None, mm_per_pixel=None):
         # Detection contract: (center_x_px, center_y_px, confidence_0_to_100).
@@ -88,19 +91,27 @@ class BallTracker:
             if self.last_x is not None:
                 if not 0 < elapsed_ms <= 500:
                     raise ValueError("invalid/stale sampling interval")
-                # Reuse F407bujin position/speed filters, keeping raw position for limits.
-                filtered = self.filtered_x + 0.45 * (x_mm - self.filtered_x)
-                raw_velocity = (filtered - self.filtered_x) * 1000.0 / elapsed_ms
-                velocity = 0.25 * raw_velocity + 0.75 * self.velocity
-            else:
-                filtered = x_mm
+                self.sample_ms += elapsed_ms
+            samples = (self.samples + [(self.sample_ms, x_mm)])[-VELOCITY_SAMPLES:]
+            while len(samples) > 2 and self.sample_ms - samples[0][0] > VELOCITY_WINDOW_MS:
+                samples = samples[1:]
+            if len(samples) > 1:
+                # Fit recent raw positions; relative time avoids long-uptime precision loss.
+                times = [t - self.sample_ms for t, _ in samples]
+                mean_t = sum(times) / len(times)
+                mean_x = sum(x for _, x in samples) / len(samples)
+                denominator = sum((t - mean_t) ** 2 for t in times)
+                if denominator <= 0:
+                    raise ValueError("invalid velocity window")
+                velocity = 1000.0 * sum((t - mean_t) * (x - mean_x)
+                                      for t, (_, x) in zip(times, samples)) / denominator
             if not (-32768 <= x_mm <= 32767 and -32768 <= velocity <= 32767):
                 raise ValueError("measurement exceeds wire format")
         except (TypeError, ValueError, OverflowError):
             self.reset()
             return LOST_MEASUREMENT
         self.last_x = x_mm
-        self.filtered_x = filtered
+        self.samples = samples
         self.velocity = velocity
         return x_mm, velocity, confidence, RAW_VALID
 

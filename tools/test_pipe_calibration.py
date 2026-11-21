@@ -54,7 +54,7 @@ class PipeCalibrationTests(unittest.TestCase):
             self.assertEqual(tracker.update(zero, 40), (0, 0, 90, app.RAW_VALID))
             x, speed, *_ = tracker.update(right, 100)
             self.assertAlmostEqual(x, -10)
-            self.assertAlmostEqual(speed, -11.25)
+            self.assertAlmostEqual(speed, -100)
             self.assertEqual(tracker.update(None, 40), app.LOST_MEASUREMENT)
             self.assertEqual(tracker.update(right, 40)[1], 0)
             self.assertEqual(tracker.update(zero, 501), app.LOST_MEASUREMENT)

@@ -4,6 +4,14 @@
 
 ## 工程现状
 
+- 当前响应延迟优化：USART3菜单改TXE中断整帧队列；TIM1保留100 us建立/100 us脉冲及2 ms方向保持，但用DWT/SysTick核对间隔，正常4 ms调度不再每步后空等2 ms，覆盖WFI与计数器回绕。K230 main.py速度改最多5点/约120 ms短窗拟合，原始毫米位置、模型和标定未变。保留全部控制默认参数及12步/4 ms时序；349项控制协议、519项真实board.c寄存器仿真、28项Python回归通过。模型包含66 ms图像延迟及新估速动态，末5 s位置RMS0.73～2.09 mm仅属仿真。33 ms采样/0.5 Hz离线速度相位延迟150.68→49.50 ms，非实测端到端延迟。正式HEX SHA256=55650be78410186a4ff05f3e46ce1f1fd7ef24950d5ca54dc5076f1cbc079c90。Keil0错误0警告。需分别更新F407固件和板上/sdcard/main.py；本次未自动部署、烧录或在线写参。详见CONTROL.md响应延迟优化。
+
+- CMSIS-DAP接口驱动已由用户安装（WinUSB，状态OK）。首次实机下载在DFP的DebugDeviceUnlock→CheckID读取0xE00FFFE8失败，未成功烧录。已在两个目标的共享uvoptx中显式设置DebugDescription/Enable=0，停用可选Pack连接序列，保留CMSIS-DAP原Flash算法和Verify OK校验要求；Keil已打开时需重开以加载。修正后的实机连接/下载尚未验证，禁止把驱动枚举正常当成SWD连通。
+
+- 下载器为沁恒WCH-Link CMSIS-DAP，WinUSB接口驱动已正常；flash_center.ps1先检查接口0驱动，再通过Keil重编译并执行-f，要求Verify OK。-Check仅查驱动，不连接目标。共享uvoptx为SWD100 kHz、512 KB算法并关闭Pack DebugDescription。上次实机连接失败与当前未验证状态见上一条；不要把接口状态OK当作SWD连通。接口1的串口用于VOFA；烧录另接SWDIO→PA13、SWCLK→PA14、GND共地。
+
+- 当前自适应稳球版：保留kp=0.5等全部本地默认参数、12步目标变化量和4 ms脉冲间隔。310仅上电/显示参考。学习补偿按输出步数独立保存，过零、丢球、超时、暂停不清除；ki=0冻结学习，gain变化不缩放已学补偿。远处朝目标速度≤4 mm/s持续0.3 s可慢积分，误差限10 mm；运动/制动保留补偿。S3需近零稳定0.3 s并追上目标，完整保持输出平滑转入参考，目标不跳变。保留max_offset总纠偏及0～650机械限幅，饱和/指令落后时阻止同向积分、允许反向退出，不设球±100 mm停机。349项Cortex-M检查、6组简化模型18阶段通过；正式Keil0错误0警告，HEX SHA256=790c0c316c007eb8b0f3823d02a14faa9c2860e1b81003e4118e3e9a504d624f。未烧录、未在线写参，模型毫米结果非实机精度。设计、模型参数、起始调参及视觉/机械边界见stm32f407_uart_test/CONTROL.md。
+
 - 扩展板 SW1–SW5 接 PD3–PD7，低电平按下，主循环按 20 ms 消抖。LED3–LED5 接 PD10、PD11、PA8，高电平点亮。接口见 `stm32f407_uart_test/Core/Inc/board.h`，使用示例见对应 README。47 项 GPIO 仿真和 187 项原有 Cortex-M 检查通过，实机待验证。
 
 - 0.96 寸四针 OLED 在 PB8/PB9 上已用 SSD1306 测试固件实机显示 `OLED OK`。正式居中目标沿用同一初始化序列，显示自检停靠位置为零的相对倾角。合并版已通过 187 项 Cortex-M 和 23 项 Python 检查，实机倾角待验证。

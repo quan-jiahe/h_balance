@@ -70,6 +70,25 @@ AC6.24 center target: 0 errors, 0 warnings; Code=15852 RO-data=1056 RW-data=60 Z
 187 Cortex-M protocol/control checks passed before user requested no more validation. Physical TTL interaction not performed
 SHA256: e0f59d07d53c07ed47df2204ff750b1883d8f8fd59d0090c100e938a639ce3af
 
+Firmware update: 2026-11-20 stalled-ball integral correction
+Based on origin/main 2c9883b; preserves user MAX_COMMAND_CHANGE=12 and PULSE_INTERVAL_MS=4
+Far low-speed ball (|x|>=10 mm, |v|<=4 mm/s) for 0.3 s enables gradual integral correction
+Integral error capped at 10 mm; ki controls ramp, ki=0 clears it; retain bias during motion/braking
+Conditional integration stops outward windup at max_offset and mechanical 0..650 limits
+Settle/STOP/loss clears integral; stable motor position stays latched, no forced return to 310
+VOFA layout remains 18 channels and 11 parameters; compiled parameter defaults retained
+211 Cortex-M control/protocol checks passed; AC6.24: 0 errors, 0 warnings
+Code=16616 RO-data=1060 RW-data=60 ZI-data=2076 bytes
+Not flashed; real-platform convergence and gains remain unverified
+SHA256: 8cf9ddee8e230192bb14e632e5f9adc819c579e76e52a66e760837e90a2049ae
+
+Download workflow: WCH-Link CMSIS-DAP through Keil UV4 -f
+SWD 100 kHz, STM32F407VE 512 KB Flash; serial interface remains independent
+flash_center.ps1 rebuilds AXF/HEX before programming and requires Verify OK in download log
+Keil configuration build checked; published HEX unchanged from stalled-ball update
+Current CMSIS-DAP interface Windows code 28: official driver installation pending
+No CMSIS-DAP target programming or reset performed
+
 Firmware update: 2026-11-21 SSD1306 angle display
 0.96-inch I2C OLED on PB8/PB9; initialization bytes match the hardware-tested OLED OK firmware.
 Keil AC6.7 with local CMSIS compatibility options: 0 errors, 3 warnings in existing control and VOFA sources.
@@ -85,3 +104,29 @@ Code=16652 RO-data=1100 RW-data=60 ZI-data=2068; HEX=17816 bytes at 0x08000000..
 HEX checksums and Reset/SysTick/USART1/USART3 vectors verified. 47 GPIO and 187 existing Cortex-M checks passed.
 Physical: startup and user I/O on this revision await hardware verification.
 SHA256: 154e182cd5c61a987547308004c7e84822280e4924e77bc247ccbbf78f11a200
+
+Firmware update: 2026-11-20 adaptive balance pose continuity
+All user tuning defaults retained, including kp=0.5; MAX_COMMAND_CHANGE=12, PULSE_INTERVAL_MS=4
+Initial pose is arbitrary; 310 only startup/display reference, never forced during balancing
+Learned bias stored in output steps; retained across zero crossing, motion, braking, loss/timeout and STOP
+ki=0 freezes learning; gain changes do not rescale the learned bias
+After 0.3 s near-zero stability and target catch-up, transfer complete hold output into reference without a target jump
+Integral ramp/error limits and conditional anti-windup for max_offset, physical travel and actuator command lag
+K230 mm position/velocity, fixed sign, KFF/KFF2, 18 VOFA channels and 11 parameters retained
+349 Cortex-M checks passed, including six idealized delayed mechanical scenarios and 18 stages
+Model tail RMS 0.78..1.67 mm is simulated, not real-platform precision; see CONTROL.md
+AC6.24 center target: 0 errors, 0 warnings; Code=16668 RO-data=1060 RW-data=60 ZI-data=2076
+No flashing or online parameter writes performed; CMSIS-DAP physical download still unverified
+SHA256: 790c0c316c007eb8b0f3823d02a14faa9c2860e1b81003e4118e3e9a504d624f
+
+Firmware update: 2026-11-20 loop/velocity latency optimization
+Preserved controller defaults, 12-step observation slew and 4 ms pulse scheduling
+DIR hold remains 2 ms, overlapped using DWT plus SysTick for WFI; 100 us setup/100 us pulse unchanged
+USART3 TX interrupt queue removes blocking per-byte menu transmission; whole-frame drop/error on overflow
+Paired K230 main.py: maximum 5-sample/120 ms position-time regression, raw mm position retained
+349 control/protocol checks, 519 real-board register-emulation checks, 28 Python regressions passed
+Updated idealized model includes 66 ms image delay plus the new velocity regression; simulated tail RMS 0.73..2.09 mm
+Offline 33 ms/0.5 Hz velocity-estimator phase delay: 150.68 -> 49.50 ms, not real end-to-end latency
+AC6.24: 0 errors, 0 warnings; Code=16860 RO-data=1060 RW-data=60 ZI-data=2348
+No automatic deployment, flashing, online tuning or real timing measurement performed
+SHA256: 55650be78410186a4ff05f3e46ce1f1fd7ef24950d5ca54dc5076f1cbc079c90

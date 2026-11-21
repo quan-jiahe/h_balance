@@ -7,6 +7,10 @@ static volatile uint32_t uart_errors;
 static uint8_t rx_buffer[256];
 static volatile uint16_t rx_head;
 static volatile uint16_t rx_tail;
+static uint8_t tx_buffer[256];
+static volatile uint16_t tx_head, tx_tail;
+static uint32_t pulse_finished_cycles, pulse_finished_ms;
+static bool pulse_sent;
 
 /* Common-anode STEP input: idle high, pulse low. Clear CC1P for active high. */
 #define STEP_POLARITY TIM_CCER_CC1P
@@ -48,6 +52,9 @@ void SystemCoreClockUpdate(void)
 
 static void step_init(void)
 {
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+    pulse_sent = false;
     RCC->AHB1ENR |= RCC_AHB1ENR_GPIOEEN;
     RCC->APB2ENR |= RCC_APB2ENR_TIM1EN;
     (void)RCC->APB2ENR;
@@ -116,6 +123,7 @@ void board_init(void)
     NVIC_SetPriority(USART3_IRQn, 1);
     NVIC_EnableIRQ(USART3_IRQn);
     USART3->CR1 = USART_CR1_UE | USART_CR1_TE | USART_CR1_RE | USART_CR1_RXNEIE;
+    tx_head = tx_tail = 0;
     (void)SysTick_Config(SystemCoreClock / 1000u);
     panel_io_init();
     step_init();
@@ -168,6 +176,10 @@ void board_led_set(BoardLed led, bool on)
 
 bool board_step_pulse(bool forward)
 {
+    /* Retain the original DIR hold, overlapped with work between scheduled pulses. */
+    /* SysTick also covers WFI intervals, where CPU cycle counting may pause. */
+    while (pulse_sent && (uint32_t)(board_millis() - pulse_finished_ms) < 3u &&
+           (uint32_t)(DWT->CYCCNT - pulse_finished_cycles) < SystemCoreClock / 500u) { }
     GPIOE->BSRR = forward ? STEP_DIR_PIN : STEP_DIR_PIN << 16;
     TIM1->SR = 0;
     TIM1->CR1 = TIM_CR1_OPM | TIM_CR1_CEN;
@@ -179,9 +191,9 @@ bool board_step_pulse(bool forward)
             return false;
         }
     }
-    /* Keep DIR stable after the final STEP edge even for queued clicks. */
-    const uint32_t end = board_millis();
-    while ((uint32_t)(board_millis() - end) < 2u) { }
+    pulse_finished_cycles = DWT->CYCCNT;
+    pulse_finished_ms = board_millis();
+    pulse_sent = true;
     return (TIM1->SR & TIM_SR_UIF) != 0u;
 }
 
@@ -308,6 +320,14 @@ void USART3_IRQHandler(void)
             }
         }
     }
+    if ((status & USART_SR_TXE) && (USART3->CR1 & USART_CR1_TXEIE)) {
+        if (tx_tail == tx_head) {
+            USART3->CR1 &= ~USART_CR1_TXEIE;
+        } else {
+            USART3->DR = tx_buffer[tx_tail];
+            tx_tail = (uint16_t)((tx_tail + 1u) & 255u);
+        }
+    }
 }
 
 uint32_t board_millis(void)
@@ -332,8 +352,23 @@ bool board_uart_read(uint8_t *byte)
 
 void board_uart_write(const uint8_t *data, size_t length)
 {
-    for (size_t i = 0; i < length; ++i) {
-        while (!(USART3->SR & USART_SR_TXE)) { }
-        USART3->DR = data[i];
+    uint16_t head = tx_head;
+    if (length > ((tx_tail - head - 1u) & 255u)) {
+        /* Drop complete debug/menu frames, never a partial frame or motor deadline. */
+        const uint32_t mask = __get_PRIMASK();
+        __disable_irq();
+        ++uart_errors;
+        if (!mask) { __enable_irq(); }
+        return;
     }
+    for (size_t i = 0; i < length; ++i) {
+        tx_buffer[head] = data[i];
+        head = (uint16_t)((head + 1u) & 255u);
+    }
+    const uint32_t mask = __get_PRIMASK();
+    __disable_irq();
+    __DMB();
+    tx_head = head;
+    USART3->CR1 |= USART_CR1_TXEIE;
+    if (!mask) { __enable_irq(); }
 }

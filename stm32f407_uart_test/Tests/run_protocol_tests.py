@@ -6,6 +6,7 @@ No emulator or Python package is needed to build/flash the normal firmware.
 
 import argparse
 import importlib.util
+import json
 from pathlib import Path
 import struct
 import subprocess
@@ -116,10 +117,18 @@ def main():
     cpu.reg_write(UC_ARM_REG_XPSR, 0x01000000)
     cpu.hook_add(UC_HOOK_INTR, lambda emulator, interrupt, user: emulator.emu_stop())
     cpu.mem_write(0xE000ED88, struct.pack("<I", 0x00F00000))
-    cpu.emu_start(entry, 0, count=35000000)
+    cpu.emu_start(entry, 0, count=600000000)
     failures, checks, done, first_failure = struct.unpack("<IIII", cpu.mem_read(0x2001E000, 16))
+    model_results = []
+    for index in range(18):
+        values = struct.unpack('<8f', cpu.mem_read(0x2001E800 + index * 32, 32))
+        print('PLANT case=%d phase=%d x=%.2f v=%.2f steps=%.0f peak=%.2f tail_rms=%.2f tail_speed=%.2f hold=%.2f neutral=%.0f' % (index//3, index%3, *values))
+        model_results.append(dict(case=index//3, phase=index%3, **dict(zip(
+            ('x_mm', 'v_mm_s', 'motor_steps', 'peak_abs_x_mm', 'tail_rms_x_mm',
+             'tail_mean_abs_v_mm_s', 'hold_fraction', 'plant_neutral_steps'), values))))
     assert done == 0xF4072300, "C test did not finish"
     assert failures == 0, f"C test failure bitmask: {failures:#x}, first failed check: {first_failure}"
+    (build / 'adaptive_model_results.json').write_text(json.dumps(model_results, indent=2))
     decoder = k230.Commands()
     for offset, expected in ((0x100, "RX:OK"), (0x180, "RX:LOST")):
         packet = bytes(cpu.mem_read(0x2001E000 + offset, 95))
@@ -155,6 +164,8 @@ def main():
     print("PASS: full upward sweep, gravity leveling, return, travel limits, stall, IMU loss and stop")
     print("PASS: two 0-650 pulse cycles with IMU offline, variable speed, no dwell, stop and pulse fault")
     print("PASS: mm auto-centering, supplied velocity, fixed sign, latched position, STOP, loss and timeout")
+    print("PASS: stalled-ball ramp, zero-crossing/STOP/loss continuity, frozen learning and saturation recovery")
+    print("PASS: six idealized mechanical models, 66 ms vision delay, unknown equilibrium, kick and tilt change")
     print("PASS: startup travel 0 -> 650 -> configured level, vision handoff and cancel")
 
 
