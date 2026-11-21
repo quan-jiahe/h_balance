@@ -77,3 +77,11 @@ Code=16244 RO-data=1100 RW-data=60 ZI-data=2028; HEX=17408 bytes at 0x08000000..
 HEX checksums and Reset/SysTick/USART1/USART3 vectors verified. 187 Cortex-M and 23 Python checks passed.
 Physical: user confirmed OLED OK on the standalone SSD1306 test firmware. Integrated angle display awaits hardware verification.
 SHA256: fe80d754beeedabf3a57a617b39f19cfebc111e4a54713b408580cb8e2672f84
+
+Firmware update: 2026-11-21 expansion board buttons and LEDs
+SW1-SW5 on PD3-PD7 with 20 ms debounce. LED3-LED5 on PD10/PD11/PA8 default to off.
+Keil AC6.7 with local compatibility options: 0 errors, 0 warnings.
+Code=16652 RO-data=1100 RW-data=60 ZI-data=2068; HEX=17816 bytes at 0x08000000..0x08004597.
+HEX checksums and Reset/SysTick/USART1/USART3 vectors verified. 47 GPIO and 187 existing Cortex-M checks passed.
+Physical: startup and user I/O on this revision await hardware verification.
+SHA256: 154e182cd5c61a987547308004c7e84822280e4924e77bc247ccbbf78f11a200

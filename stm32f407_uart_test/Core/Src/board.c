@@ -12,6 +12,21 @@ static volatile uint16_t rx_tail;
 #define STEP_POLARITY TIM_CCER_CC1P
 #define STEP_DIR_PIN (1u << 7)
 
+enum { FIRST_BUTTON_PIN = 3, BUTTON_DEBOUNCE_MS = 20 };
+#define BUTTON_MODE_MASK (((1u << (2u * BOARD_BUTTON_COUNT)) - 1u) << (2u * FIRST_BUTTON_PIN))
+#define LED3_PIN (1u << 10)
+#define LED4_PIN (1u << 11)
+#define LED5_PIN (1u << 8)
+
+typedef struct {
+    uint32_t raw_changed_ms;
+    bool raw_pressed;
+    bool stable_pressed;
+    bool press_pending;
+} ButtonState;
+
+static ButtonState buttons[BOARD_BUTTON_COUNT];
+
 void SystemInit(void)
 {
     SCB->CPACR |= (0xFu << 20);
@@ -55,9 +70,31 @@ static void step_init(void)
                    | (1u << 14) | (2u << 18);
 }
 
+static void panel_io_init(void)
+{
+    const uint32_t pd_led_modes = (3u << 20) | (3u << 22);
+    const uint32_t pa_led_mode = 3u << 16;
+
+    /* SW1-SW5 already have external pull-ups and pull low when pressed. */
+    GPIOD->PUPDR &= ~(BUTTON_MODE_MASK | pd_led_modes);
+    GPIOA->PUPDR &= ~pa_led_mode;
+
+    /* Preload the active-high LEDs low before GPIO output is enabled. */
+    GPIOD->BSRR = (LED3_PIN | LED4_PIN) << 16;
+    GPIOA->BSRR = LED5_PIN << 16;
+    GPIOD->OTYPER &= ~(LED3_PIN | LED4_PIN);
+    GPIOA->OTYPER &= ~LED5_PIN;
+    GPIOD->OSPEEDR &= ~pd_led_modes;
+    GPIOA->OSPEEDR &= ~pa_led_mode;
+    GPIOD->MODER = (GPIOD->MODER & ~(BUTTON_MODE_MASK | pd_led_modes)) |
+                   (1u << 20) | (1u << 22);
+    GPIOA->MODER = (GPIOA->MODER & ~pa_led_mode) | (1u << 16);
+}
+
 void board_init(void)
 {
-    RCC->AHB1ENR |= RCC_AHB1ENR_GPIODEN;
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN | RCC_AHB1ENR_GPIODEN;
+    (void)RCC->AHB1ENR;
     RCC->APB1ENR |= RCC_APB1ENR_USART3EN;
     (void)RCC->APB1ENR;
     RCC->APB1RSTR |= RCC_APB1RSTR_USART3RST;
@@ -80,7 +117,53 @@ void board_init(void)
     NVIC_EnableIRQ(USART3_IRQn);
     USART3->CR1 = USART_CR1_UE | USART_CR1_TE | USART_CR1_RE | USART_CR1_RXNEIE;
     (void)SysTick_Config(SystemCoreClock / 1000u);
+    panel_io_init();
     step_init();
+}
+
+void board_buttons_poll(uint32_t now_ms)
+{
+    const uint32_t input = GPIOD->IDR;
+    for (unsigned i = 0; i < BOARD_BUTTON_COUNT; ++i) {
+        ButtonState *const state = &buttons[i];
+        const bool pressed = (input & (1u << (FIRST_BUTTON_PIN + i))) == 0u;
+        if (pressed != state->raw_pressed) {
+            state->raw_pressed = pressed;
+            state->raw_changed_ms = now_ms;
+        } else if (pressed != state->stable_pressed &&
+                   now_ms - state->raw_changed_ms >= BUTTON_DEBOUNCE_MS) {
+            state->stable_pressed = pressed;
+            if (pressed) { state->press_pending = true; }
+        }
+    }
+}
+
+bool board_button_is_pressed(BoardButton button)
+{
+    return (unsigned)button < BOARD_BUTTON_COUNT && buttons[button].stable_pressed;
+}
+
+bool board_button_take_press(BoardButton button)
+{
+    if ((unsigned)button >= BOARD_BUTTON_COUNT) { return false; }
+    const bool pending = buttons[button].press_pending;
+    buttons[button].press_pending = false;
+    return pending;
+}
+
+void board_led_set(BoardLed led, bool on)
+{
+    static const struct {
+        GPIO_TypeDef *port;
+        uint32_t pin;
+    } led_gpio[BOARD_LED_COUNT] = {
+        [BOARD_LED3] = {GPIOD, LED3_PIN},
+        [BOARD_LED4] = {GPIOD, LED4_PIN},
+        [BOARD_LED5] = {GPIOA, LED5_PIN}
+    };
+    if ((unsigned)led >= BOARD_LED_COUNT) { return; }
+    const uint32_t pin = led_gpio[led].pin;
+    led_gpio[led].port->BSRR = on ? pin : pin << 16;
 }
 
 bool board_step_pulse(bool forward)

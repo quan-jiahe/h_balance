@@ -4,6 +4,8 @@
 
 ## 工程现状
 
+- 扩展板 SW1–SW5 接 PD3–PD7，低电平按下，主循环按 20 ms 消抖。LED3–LED5 接 PD10、PD11、PA8，高电平点亮。接口见 `stm32f407_uart_test/Core/Inc/board.h`，使用示例见对应 README。47 项 GPIO 仿真和 187 项原有 Cortex-M 检查通过，实机待验证。
+
 - 0.96 寸四针 OLED 在 PB8/PB9 上已用 SSD1306 测试固件实机显示 `OLED OK`。正式居中目标沿用同一初始化序列，显示自检停靠位置为零的相对倾角。合并版已通过 187 项 Cortex-M 和 23 项 Python 检查，实机倾角待验证。
 
 - 当前调参方式为USB转3.3V TTL + VOFA+，USART1 PA9 TX、PA10 RX，115200/8N1。K230仍为USART3 PD8/PD9。JustFloat每50 ms发18个通道，ASCII name=value加换行修改RAM参数，命令状态看通道6。只接收参数指令，不增加串口启动电机或写Flash命令。用户最新默认kp=0.5已保留。说明见 `stm32f407_uart_test/VOFA.md`。已执行187项Cortex-M检查（既有Python检查上次为23项），本次用户要求停止额外验证，之后仅生成发布HEX，真实TTL/VOFA交互未实测。

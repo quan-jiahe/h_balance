@@ -46,6 +46,7 @@ int main(void)
 #endif
         }
         const uint32_t now_ms = board_millis();
+        board_buttons_poll(now_ms);
 #ifdef F407_CENTER_BALANCE
         center_balance_tick(&link, now_ms);
         vofa_tuning_tick(&link, now_ms);

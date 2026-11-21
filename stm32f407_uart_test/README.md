@@ -2,6 +2,15 @@
 
 最新支持 **USB转TTL + VOFA+在线调参**：PA9 TX、PA10 RX，115200/8N1，接收协议JustFloat。接线、通道与命令见 [VOFA.md](VOFA.md)。用户默认kp=0.5已保留，修改命令如 `kp=0.3` 加换行，复位后恢复源码默认值。
 
+## 扩展板按键和 LED
+
+| 器件 | F407 引脚 | 逻辑 |
+| --- | --- | --- |
+| SW1、SW2、SW3、SW4、SW5 | PD3、PD4、PD5、PD6、PD7 | 板上电阻上拉，按下为低电平 |
+| LED3、LED4、LED5 | PD10、PD11、PA8 | 高电平点亮，上电默认熄灭 |
+
+主循环已调用 `board_buttons_poll()`，按下与释放均消抖 20 ms。包含 `board.h` 后，可用 `board_button_is_pressed(BOARD_SW1)` 读取消抖后的状态，用 `board_button_take_press(BOARD_SW1)` 读取并清除一次按下事件。长按只产生一次事件，每个按键最多保留一个待读事件。LED 用 `board_led_set(BOARD_LED3, true)` 点亮，传 `false` 熄灭。LED1 和 LED2 是固定供电指示灯。
+
 ## 毫米位置/速度自动稳球版（2026-11-20）
 
 工作目录统一为 `C:\Users\LENOVO\Desktop\ultra\h_balance`。打开 `MDK-ARM/F407_K230_UART.uvprojx`，选择 **F407_K230_Center_Balance** Target。固件为 `Firmware/F407_K230_Center_Balance.hex`，复制 HEX 时需同时保留对应编译版本的 map 供调参使用。
