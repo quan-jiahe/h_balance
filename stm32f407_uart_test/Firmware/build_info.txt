@@ -139,3 +139,12 @@ Keil AC6.7: 0 errors, 0 warnings. 358 control/protocol checks, 519 virtual-regis
 The register-test build restricts Thumb IT blocks for Unicorn. The release build uses the project's standard optimization.
 Physical buttons, OLED and motor response on the new firmware have not been tested.
 SHA256: e6f3c1c2ed1be9bb0653cbe26331f3160b0378b7ad7fc6ee3284622ca72a36b2
+
+Firmware update: MODE3 disturbance recovery and travel protection
+MODE3 learns the center pose, detects a 25..35 mm stationary hold of at least 800 ms and estimates release from subsequent motion.
+Checks 12 mm recovery within 6 s and 8 mm hold from 6 to 8 s. Latches timeout, drift, loss or observed boundary crossing.
+Brakes at 90 mm, or earlier using projected stopping distance. Retains 0..650 steps, max_offset and 4 ms pulse spacing.
+390 Cortex-M checks passed. With 66 ms modeled image delay, the -35 mm and +25 mm cases recovered in 1.414 s and 0.898 s; hold peaks 3.44 and 1.77 mm.
+Both modeled edge approaches from 86 mm at 24 mm/s peaked at 93.35 mm. Physical release timing, calibration and braking remain unverified.
+Keil AC6.24: 0 errors, 0 warnings. Code=19296 RO-data=1672 RW-data=60 ZI-data=3268.
+SHA256: 1bdef27999b2f4a4b271c72acdcb8651719b9121a7b767324678c7fb7be71505

@@ -319,17 +319,18 @@ static void test_center_startup(void)
     check(pulse_count == done && center_balance_target_steps() == 310, 24);
     center_balance_button(&link, BOARD_SW1);
     center_balance_button(&link, BOARD_SW3);
-    feed_center(&link, fixture_center_left, 300);
     check(center_balance_mode_confirmed() && center_balance_selected_mode() == BALANCE_MODE_DISTURBANCE
-          && pulse_count == done, 24);
+          && center_balance_state(&link, now_ms) == 1 && pulse_count == done, 24);
     center_balance_button(&link, BOARD_SW2);
     center_balance_button(&link, BOARD_SW2);
     center_balance_button(&link, BOARD_SW4);
     feed_center(&link, fixture_center_right, 400);
-    check(!center_balance_mode_confirmed() && pulse_count == done, 24);
+    check(!center_balance_mode_confirmed() && center_balance_state(&link, now_ms) == 2
+          && center_balance_target_steps() < 310, 24);
+    const unsigned before_confirm = pulse_count;
     center_balance_button(&link, BOARD_SW3);
     center_balance_tick(&link, ++now_ms);
-    check(center_balance_state(&link, now_ms) == 1 && pulse_count == done, 24);
+    check(center_balance_state(&link, now_ms) == 1 && pulse_count == before_confirm, 24);
     feed_center(&link, fixture_center_right, 500);
     check(center_balance_state(&link, now_ms) == 2 && center_balance_target_steps() < 310, 24);
     center_balance_button(&link, BOARD_SW1);
@@ -470,6 +471,91 @@ static void observe_ball(LinkTest *link, int16_t x, int16_t velocity)
     ++link->center_observations;
     center_balance_tick(link, now_ms);
     for (unsigned i = 0; i < 33; ++i) { center_balance_tick(link, ++now_ms); }
+}
+
+static bool mode3_status(const LinkTest *link, const char *status)
+{
+    return strcmp(center_balance_mode3_status(link, now_ms), status) == 0;
+}
+
+static void start_mode3(LinkTest *link)
+{
+    park_center_startup(link);
+    center_balance_button(link, BOARD_SW1);
+    center_balance_button(link, BOARD_SW1);
+    center_balance_button(link, BOARD_SW3);
+}
+
+static void test_mode3(void)
+{
+    LinkTest link;
+    start_mode3(&link);
+    check(mode3_status(&link, "WAIT BALL"), 27);
+    for (unsigned i = 0; i < 12; ++i) { observe_ball(&link, 0, 0); }
+    check(mode3_status(&link, "PUSH BALL"), 27);
+    for (unsigned i = 0; i < 30; ++i) { observe_ball(&link, 24, 0); }
+    check(mode3_status(&link, "PUSH BALL"), 27);
+    for (unsigned i = 0; i < 25; ++i) { observe_ball(&link, 30, 0); }
+    check(mode3_status(&link, "PUSH BALL"), 27); /* 24 intervals = 792 ms. */
+    observe_ball(&link, 31, 0);
+    check(mode3_status(&link, "WAIT RELEASE"), 27);
+    center_balance_menu(&link, now_ms);
+    check(strcmp(link.startup_rows[0], "BAL: M3 WAIT RELEASE") == 0, 27);
+    observe_ball(&link, 31, 0);
+    observe_ball(&link, 28, -12);
+    check(mode3_status(&link, "RECOVER"), 27);
+    observe_ball(&link, 12, -15);
+    for (unsigned i = 2; i < 182; ++i) { observe_ball(&link, 6, 0); }
+    check(mode3_status(&link, "RECOVER"), 27);
+    observe_ball(&link, 9, 0);
+    check(mode3_status(&link, "HOLD FAIL"), 27);
+
+    center_balance_key(&link, LINK_KEY_BACK, now_ms);
+    const int32_t stopped = link.steps;
+    observe_ball(&link, -90, -25);
+    check(mode3_status(&link, "STOP") && link.steps == stopped, 27);
+    center_balance_button(&link, BOARD_SW3);
+    for (unsigned i = 0; i < 16; ++i) { observe_ball(&link, 0, 0); }
+    for (unsigned i = 0; i < 27; ++i) { observe_ball(&link, -30, 0); }
+    check(mode3_status(&link, "WAIT RELEASE"), 27);
+    observe_ball(&link, -28, 10);
+    for (unsigned i = 1; i < 182; ++i) { observe_ball(&link, -13, 0); }
+    check(mode3_status(&link, "TIMEOUT"), 27);
+    observe_ball(&link, -90, -25);
+    check(mode3_status(&link, "EDGE BRAKE") && center_balance_target_steps() > link.steps, 27);
+
+    start_mode3(&link);
+    observe_ball(&link, 89, 0);
+    check(!mode3_status(&link, "EDGE BRAKE"), 27);
+    observe_ball(&link, 90, 0);
+    check(mode3_status(&link, "EDGE BRAKE") && center_balance_target_steps() == 160, 27);
+    observe_ball(&link, 100, 25);
+    check(mode3_status(&link, "EDGE BRAKE") && center_balance_target_steps() == 160, 27);
+    observe_ball(&link, 101, 25);
+    check(mode3_status(&link, "OUT") && center_balance_target_steps() == 160, 27);
+
+    start_mode3(&link);
+    observe_ball(&link, -75, -40);
+    check(mode3_status(&link, "EDGE BRAKE") && center_balance_target_steps() == 460, 27);
+    observe_ball(&link, -90, -40);
+    check(mode3_status(&link, "EDGE BRAKE") && center_balance_target_steps() == 460, 27);
+    const int32_t braking_steps = link.steps;
+    observe_ball(&link, -85, 12);
+    check(mode3_status(&link, "EDGE BRAKE") && abs(center_balance_target_steps() - braking_steps) <= 12, 27);
+    observe_ball(&link, -84, 12);
+    check(!mode3_status(&link, "EDGE BRAKE"), 27);
+
+    start_mode3(&link);
+    for (unsigned i = 0; i < 12; ++i) { observe_ball(&link, 0, 0); }
+    for (unsigned i = 0; i < 27; ++i) { observe_ball(&link, 30, 0); }
+    observe_ball(&link, 32, 10);
+    check(mode3_status(&link, "RECOVER"), 27);
+    const int32_t before_loss = link.steps;
+    link.center_valid = false;
+    center_balance_tick(&link, ++now_ms);
+    check(mode3_status(&link, "VISION LOST") && center_balance_target_steps() == before_loss, 27);
+    observe_ball(&link, 0, 0);
+    check(mode3_status(&link, "VISION LOST"), 27);
 }
 
 static void test_center_stall_integral(void)
@@ -708,6 +794,33 @@ static float plant_velocity(BallPlant *plant, float x)
     return denominator > 0 ? 1000 * numerator / denominator : 0;
 }
 
+static void plant_observation(LinkTest *link, BallPlant *plant)
+{
+    const unsigned i = plant->history;
+    plant->x_history[i] = plant->x;
+    plant->history = (i + 1) % 3;
+    const float x = plant->x_history[plant->history];
+    link->center_error_mm = (int16_t)lroundf(x);
+    link->center_velocity_mm_s = (int16_t)lroundf(plant_velocity(plant, x));
+    link->center_valid = true;
+    link->center_sample_ms = link->center_rx_ms = now_ms;
+    ++link->center_observations;
+}
+
+static void move_plant(const LinkTest *link, BallPlant *plant)
+{
+    const float drive = plant->response * (link->steps - plant->neutral);
+    float acceleration = drive - 0.6f * plant->velocity;
+    if (fabsf(plant->velocity) < 0.05f && fabsf(drive) <= 1.0f) {
+        plant->velocity = acceleration = 0;
+    } else {
+        const float friction_sign = fabsf(plant->velocity) < 0.05f ? drive : plant->velocity;
+        acceleration -= friction_sign > 0 ? 1.0f : -1.0f;
+    }
+    plant->velocity += acceleration * 0.001f;
+    plant->x += plant->velocity * 0.001f;
+}
+
 /* Ideal pulse tracking plus gravity, drag, dry friction and 66 ms image delay. */
 static void run_plant(LinkTest *link, BallPlant *plant, unsigned duration, unsigned report)
 {
@@ -716,31 +829,13 @@ static void run_plant(LinkTest *link, BallPlant *plant, unsigned duration, unsig
     bool valid_travel = true, valid_slew = true, saturated = false;
     for (unsigned ms = 0; ms < duration; ++ms) {
         ++now_ms;
-        if (ms % 33 == 0) {
-            const unsigned i = plant->history;
-            plant->x_history[i] = plant->x;
-            plant->history = (i + 1) % 3;
-            link->center_error_mm = (int16_t)lroundf(plant->x_history[plant->history]);
-            link->center_velocity_mm_s = (int16_t)lroundf(plant_velocity(plant, plant->x_history[plant->history]));
-            link->center_valid = true;
-            link->center_sample_ms = link->center_rx_ms = now_ms;
-            ++link->center_observations;
-        }
+        if (ms % 33 == 0) { plant_observation(link, plant); }
         const int before = center_balance_target_steps();
         center_balance_tick(link, now_ms);
         if (report == 12 && ms < 1000) { saturated |= center_balance_target_steps() <= 270; }
         valid_slew &= abs(center_balance_target_steps() - before) <= 12;
         valid_travel &= link->steps >= 0 && link->steps <= 650;
-        const float drive = plant->response * (link->steps - plant->neutral);
-        float acceleration = drive - 0.6f * plant->velocity;
-        if (fabsf(plant->velocity) < 0.05f && fabsf(drive) <= 1.0f) {
-            plant->velocity = acceleration = 0;
-        } else {
-            const float friction_sign = fabsf(plant->velocity) < 0.05f ? drive : plant->velocity;
-            acceleration -= friction_sign > 0 ? 1.0f : -1.0f;
-        }
-        plant->velocity += acceleration * 0.001f;
-        plant->x += plant->velocity * 0.001f;
+        move_plant(link, plant);
         peak = fmaxf(peak, fabsf(plant->x));
         if (ms >= duration - 5000) {
             tail_square += plant->x * plant->x;
@@ -791,6 +886,54 @@ static void test_adaptive_plant(void)
         run_plant(&link, &plant, 60000, scenario * 3 + 2);
     }
     g_balance_tuning = defaults;
+}
+
+static void test_mode3_plant(void)
+{
+    for (int side = -1; side <= 1; side += 2) {
+        LinkTest link;
+        BallPlant plant = { .neutral = 310 + side * 35, .response = side < 0 ? 0.4f : 0.8f };
+        start_mode3(&link);
+        const unsigned release_ms = 11900;
+        unsigned entered_ms = 0;
+        float hold_peak = 0.0f;
+        for (unsigned ms = 0; ms <= release_ms + 9000; ++ms) {
+            ++now_ms;
+            if (ms == 10800) {
+                check(mode3_status(&link, "PUSH BALL"), 28);
+                plant.x = side < 0 ? -35 : 25;
+                plant.velocity = 0.0f;
+            }
+            if (ms % 33 == 0) { plant_observation(&link, &plant); }
+            center_balance_tick(&link, now_ms);
+            if (ms == release_ms) { check(mode3_status(&link, "WAIT RELEASE"), 28); }
+            if (ms < 10800 || ms >= release_ms) { move_plant(&link, &plant); }
+            if (ms >= release_ms && !entered_ms && fabsf(plant.x) <= 12.0f) { entered_ms = ms - release_ms; }
+            if (ms >= release_ms + 6000 && ms <= release_ms + 8000) {
+                hold_peak = fmaxf(hold_peak, fabsf(plant.x));
+            }
+        }
+        check(entered_ms > 0 && entered_ms <= 6000 && hold_peak <= 8.0f && mode3_status(&link, "PASS"), 28);
+
+        start_mode3(&link);
+        plant = (BallPlant){ .x = side * 86, .velocity = side * 24, .neutral = 310, .response = 0.6f };
+        for (unsigned i = 0; i < 3; ++i) { plant.x_history[i] = plant.x; }
+        float edge_peak = 0.0f;
+        bool edge_braked = false;
+        for (unsigned ms = 0; ms < 2000; ++ms) {
+            ++now_ms;
+            if (ms % 33 == 0) { plant_observation(&link, &plant); }
+            center_balance_tick(&link, now_ms);
+            move_plant(&link, &plant);
+            edge_peak = fmaxf(edge_peak, fabsf(plant.x));
+            edge_braked |= mode3_status(&link, "EDGE BRAKE");
+        }
+        check(edge_braked && edge_peak <= 100.0f && fabsf(plant.x) < 85.0f, 28);
+        volatile float *report = (volatile float *)(0x2001EA40u + (side > 0 ? 12u : 0u));
+        report[0] = entered_ms;
+        report[1] = hold_peak;
+        report[2] = edge_peak;
+    }
 }
 
 static void test_vofa_tuning(void)
@@ -950,6 +1093,7 @@ int main(void)
     test_startup();
     test_pulse_cycle();
     test_center_startup();
+    test_mode3();
     test_center_balance();
     test_center_stall_integral();
     test_center_bias_continuity();
@@ -957,6 +1101,7 @@ int main(void)
     test_center_feedback_pause();
     test_center_braking();
     test_adaptive_plant();
+    test_mode3_plant();
     test_vofa_tuning();
     result[2] = 0xF4072300u;
     __asm volatile ("bkpt #0");

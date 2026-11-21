@@ -13,6 +13,14 @@ enum {
     MM_AXIS_SIGN = -1, MOTOR_MM_SIGN = FIXED_MOTOR_SIGN * MM_AXIS_SIGN
 };
 
+enum {
+    M3_PUSH_MIN_MM = 25, M3_PUSH_MAX_MM = 35, M3_PIN_JITTER_MM = 1,
+    M3_STILL_MM_S = 4, M3_PIN_MS = 800, M3_RECOVER_MM = 12,
+    M3_HOLD_MM = 8, M3_RECOVER_MS = 6000, M3_END_MS = 8000,
+    M3_EDGE_MM = 90, M3_EDGE_CLEAR_MM = 85, M3_BOUNDARY_MM = 100,
+    M3_PREDICT_FROM_MM = 45, M3_RESPONSE_MS = 150
+};
+
 _Static_assert(sizeof(BalanceTuning) == 52, "SWD tuning layout changed");
 
 /* 在 VSCode 修改这些默认值，再编译并烧录即可永久生效。 */
@@ -44,6 +52,12 @@ static uint32_t seen_observations, last_pulse_ms, started_ms;
 static int32_t target_steps, level_steps, anchor_steps;
 static bool startup_motion, armed, active;
 static BalanceMode selected_mode, confirmed_mode;
+static struct {
+    enum { M3_CENTER, M3_READY, M3_HELD, M3_RECOVER, M3_PASS, M3_TIME, M3_DRIFT, M3_LOST, M3_OUT } phase;
+    int16_t pin_position;
+    uint32_t pin_since, last_pinned_ms;
+    bool entered, edge, edge_output;
+} mode3;
 typedef enum { NO_FAULT, BOOT_TIMEOUT, STEP_PULSE } FaultReason;
 static FaultReason fault_reason;
 
@@ -85,6 +99,71 @@ static void fail(const LinkTest *link, FaultReason reason)
     hold_here(link);
 }
 
+static bool implemented_mode(BalanceMode mode)
+{
+    return mode == BALANCE_MODE_CENTER || mode == BALANCE_MODE_DISTURBANCE;
+}
+
+static void mode3_vision_gap(void)
+{
+    if (confirmed_mode != BALANCE_MODE_DISTURBANCE) { return; }
+    if (mode3.phase == M3_HELD || mode3.phase == M3_RECOVER) { mode3.phase = M3_LOST; }
+    mode3.pin_position = 0;
+    mode3.edge = mode3.edge_output = false;
+}
+
+static void mode3_observe(const LinkTest *link)
+{
+    const float x = link->center_error_mm;
+    const float distance = fabsf(x), speed = fabsf(link->center_velocity_mm_s);
+    const float outward = x < 0.0f ? -link->center_velocity_mm_s : link->center_velocity_mm_s;
+    const float projected = distance + outward * (M3_RESPONSE_MS * 0.001f)
+        + outward * outward / (2.0f * g_balance_tuning.accel);
+    const bool approaching = distance >= M3_PREDICT_FROM_MM && outward > 0.0f
+        && (projected >= M3_BOUNDARY_MM || mode3.edge);
+    mode3.edge = distance >= M3_EDGE_MM || approaching
+        || (mode3.edge && distance >= M3_EDGE_CLEAR_MM);
+
+    if (mode3.phase >= M3_PASS) { return; }
+    if (distance > M3_BOUNDARY_MM) {
+        mode3.phase = M3_OUT;
+        return;
+    }
+    const uint32_t sample = link->center_sample_ms;
+    const bool near_pin = mode3.pin_position != 0 && fabsf(x - mode3.pin_position) <= M3_PIN_JITTER_MM;
+    if (mode3.phase == M3_READY) {
+        if (!near_pin && (distance < M3_PUSH_MIN_MM || distance > M3_PUSH_MAX_MM)) {
+            mode3.pin_position = 0;
+        } else {
+            if (!near_pin) {
+                mode3.pin_position = link->center_error_mm;
+                mode3.pin_since = sample;
+            }
+            if (speed <= M3_STILL_MM_S && sample - mode3.pin_since >= M3_PIN_MS) {
+                mode3.last_pinned_ms = sample;
+                mode3.phase = M3_HELD;
+            }
+        }
+    } else if (mode3.phase == M3_HELD) {
+        /* Estimate release from motion after a stationary plateau. The physical release is not sensed. */
+        const float motion = x - mode3.pin_position;
+        if (near_pin && speed <= M3_STILL_MM_S) {
+            mode3.last_pinned_ms = sample;
+        } else if (fabsf(motion) > M3_PIN_JITTER_MM && motion * link->center_velocity_mm_s > 0.0f) {
+            mode3.phase = M3_RECOVER;
+        }
+    }
+    if (mode3.phase == M3_RECOVER) {
+        const uint32_t elapsed = sample - mode3.last_pinned_ms;
+        if (elapsed <= M3_RECOVER_MS && distance <= M3_RECOVER_MM) { mode3.entered = true; }
+        if (elapsed >= M3_RECOVER_MS) {
+            if (!mode3.entered) { mode3.phase = M3_TIME; }
+            else if (distance > M3_HOLD_MM) { mode3.phase = M3_DRIFT; }
+            else if (elapsed >= M3_END_MS) { mode3.phase = M3_PASS; }
+        }
+    }
+}
+
 /* The K230 already estimates mm/s; do not differentiate/filter it a second time. */
 static void update_target(const LinkTest *link)
 {
@@ -98,6 +177,27 @@ static void update_target(const LinkTest *link)
     }
     ball.sample_ms = link->center_sample_ms;
     ball.initialized = true;
+    const float end0 = MOTOR_MM_SIGN * -anchor_steps;
+    const float end1 = MOTOR_MM_SIGN * (AXIS_MAX_STEPS - anchor_steps);
+    const float low = fmaxf(-g_balance_tuning.max_offset, fminf(end0, end1));
+    const float high = fminf(g_balance_tuning.max_offset, fmaxf(end0, end1));
+    const bool disturbance = confirmed_mode == BALANCE_MODE_DISTURBANCE;
+    const float outward = position < 0.0f ? -velocity : velocity;
+    if (disturbance && mode3.edge && outward >= -M3_STILL_MM_S) {
+        /* Remove the per-frame target slew during braking. STEP timing and travel limits still apply. */
+        ball.reference = ball.stalled_seconds = ball.stable_seconds = 0.0f;
+        ball.settled = false;
+        ball.braking = true;
+        ball.demand = position > 0.0f ? low : high;
+        mode3.edge_output = true;
+        target_steps = bounded_target(anchor_steps + MOTOR_MM_SIGN * (int32_t)lroundf(ball.demand));
+        return;
+    }
+    if (disturbance && mode3.edge_output) {
+        /* Resume the normal slew from the pulses actually sent, discarding the pending brake target. */
+        ball.demand = MOTOR_MM_SIGN * (link->steps - anchor_steps);
+        mode3.edge_output = false;
+    }
     const bool near_zero = ball.settled ? distance < 4.0f && speed < 10.0f
                                        : distance <= 2.0f && speed <= 4.0f;
     ball.stable_seconds = near_zero ? fminf(0.3f, ball.stable_seconds + dt) : 0.0f;
@@ -111,6 +211,7 @@ static void update_target(const LinkTest *link)
         ball.settled = true;
     }
     if (ball.settled) {
+        if (disturbance && mode3.phase == M3_CENTER) { mode3.phase = M3_READY; }
         return;
     }
     const float direction = error > 0.0f ? 1.0f : (error < 0.0f ? -1.0f : 0.0f);
@@ -132,7 +233,9 @@ static void update_target(const LinkTest *link)
     const float integral_limit = g_balance_tuning.max_offset;
     ball.integral = clamp(ball.integral, -integral_limit, integral_limit);
     const float previous_integral = ball.integral;
-    if (!ball.braking && ((distance < 10.0f && speed < 14.0f) || ball.stalled_seconds >= 0.3f)) {
+    /* Keep the learned level while the judge is moving or holding the ball. */
+    const bool allow_learning = !disturbance || (!mode3.edge && mode3.phase != M3_READY && mode3.phase != M3_HELD);
+    if (allow_learning && !ball.braking && ((distance < 10.0f && speed < 14.0f) || ball.stalled_seconds >= 0.3f)) {
         /* Bound the ramp rate independently of how far the ball is from zero. */
         ball.integral = clamp(ball.integral + gain * g_balance_tuning.ki * clamp(error, -10.0f, 10.0f) * dt,
             -integral_limit, integral_limit);
@@ -140,10 +243,6 @@ static void update_target(const LinkTest *link)
     const float kv = g_balance_tuning.kv * (ball.braking ? g_balance_tuning.brake : 1.0f);
     const float base = gain * (g_balance_tuning.kp * error + kv * (ball.reference - velocity))
         + g_balance_tuning.kff * velocity + g_balance_tuning.kff2 * velocity * speed;
-    const float end0 = MOTOR_MM_SIGN * -anchor_steps;
-    const float end1 = MOTOR_MM_SIGN * (AXIS_MAX_STEPS - anchor_steps);
-    const float low = fmaxf(-g_balance_tuning.max_offset, fminf(end0, end1));
-    const float high = fminf(g_balance_tuning.max_offset, fmaxf(end0, end1));
     float demand = base + ball.integral;
     const float integral_change = ball.integral - previous_integral;
     const float applied = MOTOR_MM_SIGN * (link->steps - anchor_steps);
@@ -173,6 +272,24 @@ uint8_t center_balance_state(const LinkTest *link, uint32_t now)
 
 BalanceMode center_balance_selected_mode(void) { return selected_mode; }
 bool center_balance_mode_confirmed(void) { return selected_mode == confirmed_mode; }
+
+const char *center_balance_mode3_status(const LinkTest *link, uint32_t now)
+{
+    if (!armed) { return "STOP"; }
+    if (mode3.phase == M3_OUT) { return "OUT"; }
+    if (mode3.edge && vision_ready(link, now)) { return "EDGE BRAKE"; }
+    switch (mode3.phase) {
+    case M3_PASS: return "PASS";
+    case M3_TIME: return "TIMEOUT";
+    case M3_DRIFT: return "HOLD FAIL";
+    case M3_LOST: return "VISION LOST";
+    default: break;
+    }
+    if (!active || !vision_ready(link, now)) { return "WAIT BALL"; }
+    if (mode3.phase == M3_READY) { return "PUSH BALL"; }
+    if (mode3.phase == M3_HELD) { return "WAIT RELEASE"; }
+    return mode3.phase == M3_RECOVER ? "RECOVER" : "CENTER";
+}
 
 void center_balance_init(void)
 {
@@ -231,9 +348,11 @@ void center_balance_button(const LinkTest *link, BoardButton button)
         if (armed && selected_mode == confirmed_mode) { return; }
         hold_here(link);
         confirmed_mode = selected_mode;
-        armed = confirmed_mode == BALANCE_MODE_CENTER;
+        armed = implemented_mode(confirmed_mode);
+        mode3.phase = M3_CENTER;
+        mode3.pin_position = 0;
+        mode3.entered = mode3.edge = mode3.edge_output = false;
         seen_observations = link->center_observations;
-
     }
 }
 
@@ -248,16 +367,21 @@ void center_balance_tick(LinkTest *link, uint32_t now)
     if (!startup_motion && level_steps >= 0) {
         if (!armed) { return; }
         if (!vision_ready(link, now)) {
-            if (active) { hold_here(link); }
+            if (active) {
+                mode3_vision_gap();
+                hold_here(link);
+            }
             return;
         }
         if (seen_observations != link->center_observations) {
             seen_observations = link->center_observations;
             if (!active || (ball.initialized &&
                     link->center_sample_ms - ball.sample_ms >= VISION_TIMEOUT_MS)) {
+                mode3_vision_gap();
                 hold_here(link);
             }
             active = true;
+            if (confirmed_mode == BALANCE_MODE_DISTURBANCE) { mode3_observe(link); }
             update_target(link);
         }
     }
@@ -289,11 +413,15 @@ void center_balance_menu(LinkTest *link, uint32_t now)
         : startup_motion ? (target_steps == AXIS_MAX_STEPS ? "BAL: STARTUP UP" : "BAL: RETURN 310")
         : level_steps < 0 ? "BAL: SET LEVEL"
         : !confirmed_mode ? "BAL: CONFIRM MODE"
-        : confirmed_mode != BALANCE_MODE_CENTER ? "BAL: MODE RESERVED"
+        : !implemented_mode(confirmed_mode) ? "BAL: MODE RESERVED"
         : state == 4 ? "BAL: S4 STOPPED"
         : state == 2 || state == 3 ? (state == 3 ? "BAL: S3 HOLD ZERO" : "BAL: S2 ZERO")
         : "BAL: S1 WAIT BALL";
-    snprintf(link->startup_rows[0], 22, "%s", status);
+    if (confirmed_mode == BALANCE_MODE_DISTURBANCE && state != 0 && state != 5 && level_steps >= 0) {
+        snprintf(link->startup_rows[0], 22, "BAL: M3 %s", center_balance_mode3_status(link, now));
+    } else {
+        snprintf(link->startup_rows[0], 22, "%s", status);
+    }
     if (fault_reason == STEP_PULSE || link->step_fault) {
         snprintf(link->startup_rows[1], 22, "STEP PULSE FAIL");
     } else if (fault_reason == BOOT_TIMEOUT) {

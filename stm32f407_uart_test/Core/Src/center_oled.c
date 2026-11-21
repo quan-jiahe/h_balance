@@ -199,6 +199,7 @@ static void make_frame(const LinkTest *link, uint32_t now)
     const uint8_t state = center_balance_state(link, now);
     const char *status = state == 5 ? "FAULT" : state == 0 ? "STARTUP"
         : !center_balance_mode_confirmed() ? "CONFIRM"
+        : mode == BALANCE_MODE_DISTURBANCE ? center_balance_mode3_status(link, now)
         : mode != BALANCE_MODE_CENTER ? "RESERVED"
         : state == 4 ? "STOP" : state == 3 ? "HOLD" : state == 2 ? "RUN" : "WAIT BALL";
     snprintf(line, sizeof(line), "MODE%u %s", (unsigned)mode, status);
