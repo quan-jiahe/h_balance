@@ -69,3 +69,11 @@ Preserved user default kp=0.5, axis sign, stable-position latch and continuous c
 AC6.24 center target: 0 errors, 0 warnings; Code=15852 RO-data=1056 RW-data=60 ZI-data=2028
 187 Cortex-M protocol/control checks passed before user requested no more validation. Physical TTL interaction not performed
 SHA256: e0f59d07d53c07ed47df2204ff750b1883d8f8fd59d0090c100e938a639ce3af
+
+Firmware update: 2026-11-21 SSD1306 angle display
+0.96-inch I2C OLED on PB8/PB9; initialization bytes match the hardware-tested OLED OK firmware.
+Keil AC6.7 with local CMSIS compatibility options: 0 errors, 3 warnings in existing control and VOFA sources.
+Code=16244 RO-data=1100 RW-data=60 ZI-data=2028; HEX=17408 bytes at 0x08000000..0x080043FF.
+HEX checksums and Reset/SysTick/USART1/USART3 vectors verified. 187 Cortex-M and 23 Python checks passed.
+Physical: user confirmed OLED OK on the standalone SSD1306 test firmware. Integrated angle display awaits hardware verification.
+SHA256: fe80d754beeedabf3a57a617b39f19cfebc111e4a54713b408580cb8e2672f84
