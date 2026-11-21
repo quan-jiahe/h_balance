@@ -2,6 +2,7 @@
 #include "balance_tuning.h"
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include "board.h"
 
 enum {
@@ -44,6 +45,17 @@ static uint32_t seen_observations, last_pulse_ms, started_ms;
 static int32_t target_steps, level_steps, anchor_steps;
 static bool startup_motion, armed, active;
 static BalanceMode selected_mode, confirmed_mode;
+enum { MODE2_START_TOL_MM = 5, MODE2_HOLD_TOL_MM = 8,
+       MODE2_LEG_LIMIT_MS = 7000, MODE2_HOLD_MS = 1500, MODE2_TOTAL_LIMIT_MS = 30000 };
+typedef enum {
+    THREE_WAIT_START, THREE_MOVE, THREE_HOLD, THREE_DONE, THREE_TIMEOUT, THREE_STOP
+} ThreePointPhase;
+static struct {
+    ThreePointPhase phase;
+    unsigned leg;
+    uint32_t pressed_ms, leg_started_ms, hold_started_ms;
+} sequence;
+static const int16_t three_targets_mm[] = {-50, 50, 0};
 typedef enum { NO_FAULT, BOOT_TIMEOUT, STEP_PULSE } FaultReason;
 static FaultReason fault_reason;
 
@@ -55,6 +67,32 @@ static float clamp(float value, float min, float max)
 static bool vision_ready(const LinkTest *link, uint32_t now)
 {
     return link->center_valid && now - link->center_rx_ms < VISION_TIMEOUT_MS;
+}
+
+static bool three_points_running(void)
+{
+    return sequence.phase == THREE_MOVE || sequence.phase == THREE_HOLD;
+}
+
+static bool three_points_start_ready(const LinkTest *link, uint32_t now)
+{
+    return vision_ready(link, now) && abs(link->center_error_mm) <= MODE2_START_TOL_MM;
+}
+
+const char *center_balance_three_point_status(const LinkTest *link, uint32_t now)
+{
+    static const char *const moving[] = {"P1 MOVE", "P2 MOVE", "O MOVE"};
+    static const char *const holding[] = {"P1 HOLD", "P2 HOLD", "O HOLD"};
+    static const char *const lost[] = {"P1 LOST", "P2 LOST", "O LOST"};
+    static const char *const timed_out[] = {"P1 TIMEOUT", "P2 TIMEOUT", "O TIMEOUT"};
+    switch (sequence.phase) {
+    case THREE_MOVE: return vision_ready(link, now) ? moving[sequence.leg] : lost[sequence.leg];
+    case THREE_HOLD: return holding[sequence.leg];
+    case THREE_DONE: return "O DONE";
+    case THREE_TIMEOUT: return timed_out[sequence.leg];
+    case THREE_STOP: return "STOP";
+    default: return three_points_start_ready(link, now) ? "O PRESS START" : "PLACE AT O";
+    }
 }
 
 static int32_t bounded_target(int32_t step)
@@ -85,12 +123,46 @@ static void fail(const LinkTest *link, FaultReason reason)
     hold_here(link);
 }
 
+/* Returns true when the target changed and the controller must wait for a new sample. */
+static bool three_points_observe(const LinkTest *link, uint32_t now)
+{
+    const int error = three_targets_mm[sequence.leg] - link->center_error_mm;
+    if (abs(error) > MODE2_HOLD_TOL_MM) {
+        sequence.phase = THREE_MOVE;
+    } else if (sequence.phase == THREE_MOVE) {
+        sequence.phase = THREE_HOLD;
+        sequence.hold_started_ms = now;
+    } else if (sequence.phase == THREE_HOLD && now - sequence.hold_started_ms >= MODE2_HOLD_MS) {
+        if (sequence.leg + 1 < sizeof(three_targets_mm) / sizeof(three_targets_mm[0])) {
+            ++sequence.leg;
+            sequence.leg_started_ms = now;
+            sequence.phase = THREE_MOVE;
+            hold_here(link);
+            return true;
+        }
+        sequence.phase = THREE_DONE;
+    }
+    return false;
+}
+
+static bool three_points_within_time(const LinkTest *link, uint32_t now)
+{
+    if (now - sequence.pressed_ms <= MODE2_TOTAL_LIMIT_MS
+        && (sequence.phase == THREE_HOLD || now - sequence.leg_started_ms <= MODE2_LEG_LIMIT_MS)) {
+        return true;
+    }
+    sequence.phase = THREE_TIMEOUT;
+    armed = false;
+    hold_here(link);
+    return false;
+}
+
 /* The K230 already estimates mm/s; do not differentiate/filter it a second time. */
-static void update_target(const LinkTest *link)
+static void update_target(const LinkTest *link, int16_t target_mm)
 {
     const float position = link->center_error_mm;
     const float velocity = link->center_velocity_mm_s;
-    const float error = -position;
+    const float error = target_mm - position;
     const float distance = fabsf(error), speed = fabsf(velocity);
     float dt = 0.033f;
     if (ball.initialized) {
@@ -182,6 +254,8 @@ void center_balance_init(void)
     fault_reason = NO_FAULT;
     selected_mode = BALANCE_MODE_CENTER;
     confirmed_mode = BALANCE_MODE_NONE;
+    sequence.phase = THREE_WAIT_START;
+    sequence.leg = 0;
     armed = false;
     startup_motion = true;
     target_steps = AXIS_MAX_STEPS;
@@ -193,7 +267,9 @@ void center_balance_init(void)
 void center_balance_key(const LinkTest *link, uint8_t key, uint32_t now)
 {
     (void)now;
-    if (key == LINK_KEY_BACK || (key == LINK_KEY_OK && armed && !startup_motion)) {
+    if (key == LINK_KEY_BACK || (key == LINK_KEY_OK && armed && !startup_motion
+                                && confirmed_mode == BALANCE_MODE_CENTER)) {
+        if (confirmed_mode == BALANCE_MODE_THREE_POINTS && armed) { sequence.phase = THREE_STOP; }
         armed = startup_motion = false;
         hold_here(link);
     } else if (startup_motion || fault_reason != NO_FAULT || link->step_fault) {
@@ -220,8 +296,9 @@ void center_balance_key(const LinkTest *link, uint8_t key, uint32_t now)
     }
 }
 
-void center_balance_button(const LinkTest *link, BoardButton button)
+void center_balance_button(const LinkTest *link, BoardButton button, uint32_t pressed_ms)
 {
+    if (three_points_running()) { return; }
     if (button == BOARD_SW1) {
         selected_mode = selected_mode == BALANCE_MODE_RESERVED ? BALANCE_MODE_CENTER : selected_mode + 1;
     } else if (button == BOARD_SW2) {
@@ -231,9 +308,19 @@ void center_balance_button(const LinkTest *link, BoardButton button)
         if (armed && selected_mode == confirmed_mode) { return; }
         hold_here(link);
         confirmed_mode = selected_mode;
+        sequence.phase = THREE_WAIT_START;
         armed = confirmed_mode == BALANCE_MODE_CENTER;
         seen_observations = link->center_observations;
-
+    } else if (button == BOARD_SW4 && confirmed_mode == BALANCE_MODE_THREE_POINTS
+               && selected_mode == confirmed_mode && !startup_motion && level_steps >= 0
+               && fault_reason == NO_FAULT && !link->step_fault
+               && three_points_start_ready(link, board_millis())) {
+        hold_here(link);
+        sequence.leg = 0;
+        sequence.pressed_ms = sequence.leg_started_ms = pressed_ms;
+        sequence.phase = THREE_MOVE;
+        armed = true;
+        seen_observations = link->center_observations;
     }
 }
 
@@ -247,18 +334,27 @@ void center_balance_tick(LinkTest *link, uint32_t now)
     }
     if (!startup_motion && level_steps >= 0) {
         if (!armed) { return; }
-        if (!vision_ready(link, now)) {
+        const bool running = three_points_running();
+        const bool ready = vision_ready(link, now);
+        const bool sample_gap = ball.initialized
+            && link->center_sample_ms - ball.sample_ms >= VISION_TIMEOUT_MS;
+        if (running && (!ready || sample_gap)) { sequence.phase = THREE_MOVE; }
+        if (running && !three_points_within_time(link, now)) { return; }
+        if (!ready) {
             if (active) { hold_here(link); }
             return;
         }
         if (seen_observations != link->center_observations) {
             seen_observations = link->center_observations;
-            if (!active || (ball.initialized &&
-                    link->center_sample_ms - ball.sample_ms >= VISION_TIMEOUT_MS)) {
+            if (!active || sample_gap) {
                 hold_here(link);
             }
+            if (running) {
+                if (three_points_observe(link, now)) { return; }
+                if (three_points_running() && !three_points_within_time(link, now)) { return; }
+            }
             active = true;
-            update_target(link);
+            update_target(link, running ? three_targets_mm[sequence.leg] : 0);
         }
     }
     if (link->steps != target_steps && now - last_pulse_ms >= PULSE_INTERVAL_MS) {
@@ -289,11 +385,13 @@ void center_balance_menu(LinkTest *link, uint32_t now)
         : startup_motion ? (target_steps == AXIS_MAX_STEPS ? "BAL: STARTUP UP" : "BAL: RETURN 310")
         : level_steps < 0 ? "BAL: SET LEVEL"
         : !confirmed_mode ? "BAL: CONFIRM MODE"
+        : confirmed_mode == BALANCE_MODE_THREE_POINTS ? center_balance_three_point_status(link, now)
         : confirmed_mode != BALANCE_MODE_CENTER ? "BAL: MODE RESERVED"
         : state == 4 ? "BAL: S4 STOPPED"
         : state == 2 || state == 3 ? (state == 3 ? "BAL: S3 HOLD ZERO" : "BAL: S2 ZERO")
         : "BAL: S1 WAIT BALL";
-    snprintf(link->startup_rows[0], 22, "%s", status);
+    snprintf(link->startup_rows[0], 22, "%s%s",
+             confirmed_mode == BALANCE_MODE_THREE_POINTS && state != 5 ? "BAL: " : "", status);
     if (fault_reason == STEP_PULSE || link->step_fault) {
         snprintf(link->startup_rows[1], 22, "STEP PULSE FAIL");
     } else if (fault_reason == BOOT_TIMEOUT) {

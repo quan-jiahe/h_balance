@@ -126,6 +126,10 @@ def main():
         model_results.append(dict(case=index//3, phase=index%3, **dict(zip(
             ('x_mm', 'v_mm_s', 'motor_steps', 'peak_abs_x_mm', 'tail_rms_x_mm',
              'tail_mean_abs_v_mm_s', 'hold_fraction', 'plant_neutral_steps'), values))))
+    for index in range(3):
+        values = struct.unpack('<6f', cpu.mem_read(0x2001E700 + index * 32, 24))
+        print('MODE2 case=%d move_ms=(%.0f, %.0f, %.0f) done_ms=%.0f reached=%g peak_abs_x=%.2f' %
+              (index, *values))
     assert done == 0xF4072300, "C test did not finish"
     assert failures == 0, f"C test failure bitmask: {failures:#x}, first failed check: {first_failure}"
     (build / 'adaptive_model_results.json').write_text(json.dumps(model_results, indent=2))

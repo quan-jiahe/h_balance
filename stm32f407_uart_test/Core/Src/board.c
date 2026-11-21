@@ -23,7 +23,7 @@ enum { FIRST_BUTTON_PIN = 3, BUTTON_DEBOUNCE_MS = 20 };
 #define LED5_PIN (1u << 8)
 
 typedef struct {
-    uint32_t raw_changed_ms;
+    uint32_t raw_changed_ms, pressed_ms;
     bool raw_pressed;
     bool stable_pressed;
     bool press_pending;
@@ -141,7 +141,10 @@ void board_buttons_poll(uint32_t now_ms)
         } else if (pressed != state->stable_pressed &&
                    now_ms - state->raw_changed_ms >= BUTTON_DEBOUNCE_MS) {
             state->stable_pressed = pressed;
-            if (pressed) { state->press_pending = true; }
+            if (pressed && !state->press_pending) {
+                state->press_pending = true;
+                state->pressed_ms = state->raw_changed_ms;
+            }
         }
     }
 }
@@ -153,8 +156,14 @@ bool board_button_is_pressed(BoardButton button)
 
 bool board_button_take_press(BoardButton button)
 {
+    return board_button_take_press_at(button, NULL);
+}
+
+bool board_button_take_press_at(BoardButton button, uint32_t *pressed_ms)
+{
     if ((unsigned)button >= BOARD_BUTTON_COUNT) { return false; }
     const bool pending = buttons[button].press_pending;
+    if (pending && pressed_ms != NULL) { *pressed_ms = buttons[button].pressed_ms; }
     buttons[button].press_pending = false;
     return pending;
 }

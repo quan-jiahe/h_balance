@@ -28,6 +28,8 @@ void board_buttons_poll(uint32_t now_ms);
 bool board_button_is_pressed(BoardButton button);
 /* Consume a pending press. At most one press is stored per button. */
 bool board_button_take_press(BoardButton button);
+/* Also return the raw press timestamp after the press has passed debounce. */
+bool board_button_take_press_at(BoardButton button, uint32_t *pressed_ms);
 void board_led_set(BoardLed led, bool on);
 bool board_uart_read(uint8_t *byte);
 /* Nonblocking whole-frame enqueue; overflow drops the frame and increments errors. */

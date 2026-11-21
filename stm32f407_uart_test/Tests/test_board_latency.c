@@ -29,6 +29,20 @@ int main(void)
 {
     board_init();
     check((DWT->CTRL & DWT_CTRL_CYCCNTENA_Msk) != 0);
+    volatile uint32_t *const button_inputs = (volatile uint32_t *)(&GPIOD->IDR);
+    const uint32_t all_released = 31u << 3;
+    uint32_t pressed_ms = 0;
+    *button_inputs = all_released;
+    board_buttons_poll(100);
+    *button_inputs = all_released & ~(1u << 6);
+    board_buttons_poll(104);
+    board_buttons_poll(123);
+    check(!board_button_take_press_at(BOARD_SW4, &pressed_ms));
+    board_buttons_poll(124);
+    *button_inputs = all_released;
+    board_buttons_poll(130);
+    check(board_button_take_press_at(BOARD_SW4, &pressed_ms) && pressed_ms == 104);
+    check(!board_button_take_press_at(BOARD_SW4, &pressed_ms));
     uint32_t began = DWT->CYCCNT;
     check(board_step_pulse(true));
     check((uint32_t)(DWT->CYCCNT - began) <= 16u * 250u);
