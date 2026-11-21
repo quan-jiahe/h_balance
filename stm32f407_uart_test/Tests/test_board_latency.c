@@ -46,6 +46,10 @@ int main(void)
     uint32_t began = DWT->CYCCNT;
     check(board_step_pulse(true));
     check((uint32_t)(DWT->CYCCNT - began) <= 16u * 250u);
+    wait_cycles(16u * 1800u); /* About 2 ms from the first pulse start. */
+    began = DWT->CYCCNT;
+    check(board_step_pulse(true));
+    check((uint32_t)(DWT->CYCCNT - began) <= 16u * 250u);
     check(board_step_pulse(false)); /* Immediate reversal must retain DIR hold. */
     wait_cycles(16u * 4000u);
     began = DWT->CYCCNT;

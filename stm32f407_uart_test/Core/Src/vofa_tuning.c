@@ -3,18 +3,17 @@
 #include "balance_tuning.h"
 #include "center_balance.h"
 #include <ctype.h>
+#include <float.h>
 #include <math.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 
-typedef struct { const char *name; size_t offset; float low, high; } Parameter;
-#define PARAM(name, low, high) {#name, offsetof(BalanceTuning, name), low, high}
+typedef struct { const char *name; size_t offset; } Parameter;
+#define PARAM(name) {#name, offsetof(BalanceTuning, name)}
 static const Parameter parameters[] = {
-    PARAM(kp, 0, 3), PARAM(kv, 0, 4), PARAM(ki, 0, 3), PARAM(gain, 0, 3),
-    PARAM(brake, 1, 4), PARAM(max_speed, 1, 150), PARAM(accel, 1, 300),
-    PARAM(ref_accel, 1, 500), PARAM(kff, -3, 3), PARAM(kff2, -0.05f, 0.05f),
-    PARAM(max_offset, 1, 300)
+    PARAM(kp), PARAM(kv), PARAM(ki), PARAM(gain), PARAM(brake), PARAM(max_speed),
+    PARAM(accel), PARAM(ref_accel), PARAM(kff), PARAM(kff2), PARAM(max_offset)
 };
 enum { PARAM_COUNT = sizeof(parameters) / sizeof(parameters[0]),
        CHANNELS = 7 + PARAM_COUNT, PERIOD_MS = 50, LINE_SIZE = 64 };
@@ -41,16 +40,21 @@ static bool apply_command(void)
     for (char *c = name; *c; ++c) { *c = (char)tolower((unsigned char)*c); }
     char *end;
     const char *number = equals + 1;
-    const float value = strtof(number, &end);
-    if (end == number || !isfinite(value)) { return false; }
+    const double parsed = strtod(number, &end);
+    if (end == number || !isfinite(parsed) || fabs(parsed) > FLT_MAX) { return false; }
+    const float value = (float)parsed;
     while (isspace((unsigned char)*end)) { ++end; }
     if (*end) { return false; }
     for (unsigned i = 0; i < PARAM_COUNT; ++i) {
         const Parameter *p = &parameters[i];
-        if (strcmp(name, p->name) == 0 && value >= p->low && value <= p->high) {
-            *value_at(p) = value;
-            return true;
-        }
+        if (strcmp(name, p->name) != 0) { continue; }
+        /* Braking divides by accel. Speed, ramp, and offset are magnitudes. */
+        if ((value <= 0.0f && p->offset == offsetof(BalanceTuning, accel)) ||
+            (value < 0.0f && (p->offset == offsetof(BalanceTuning, max_speed) ||
+                              p->offset == offsetof(BalanceTuning, ref_accel) ||
+                              p->offset == offsetof(BalanceTuning, max_offset)))) { return false; }
+        *value_at(p) = value;
+        return true;
     }
     return false;
 }

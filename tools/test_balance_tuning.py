@@ -19,10 +19,15 @@ class TuningTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 tuner.symbol_address(text)
 
-    def test_rejects_unknown_nonfinite_and_unsafe_gains(self):
-        for name, value in (("direction", -1), ("kp", "nan"), ("accel", 0), ("max_offset", 651)):
+    def test_checks_finite_float32_and_math_domain(self):
+        for name, value in (("direction", -1), ("kp", "nan"), ("ki", 1e39),
+                            ("accel", 0), ("accel", 1e-60), ("max_offset", -1),
+                            ("max_speed", -1), ("ref_accel", -1)):
             with self.assertRaises(ValueError):
                 tuner.validate(name, value)
+        for name, value in (("kp", 5.5), ("ki", -1), ("brake", 0.5),
+                            ("accel", 400), ("max_offset", 651), ("ref_accel", 0)):
+            self.assertEqual(tuner.validate(name, value), value)
 
     def test_firmware_signature_and_gain_decode(self):
         values = (0.25, 0.7, 0.875, 1.5, 1.6, 72, 88, 120, 0, 0, 150)
@@ -52,12 +57,12 @@ class TuningTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as folder:
                 mapfile = Path(folder) / "firmware.map"
                 mapfile.write_text(" g_balance_tuning 0x20000008 Data 52 center_balance.o")
-                args = ["tune_balance.py", "--map", str(mapfile), "--set", "kv=0.85"]
+                args = ["tune_balance.py", "--map", str(mapfile), "--set", "kv=8.5"]
                 with patch.object(sys, "argv", args), patch.object(tuner.subprocess, "run", fake_cli), patch("builtins.print"):
                     if good:
                         tuner.main()
                         self.assertEqual(writes, [0x20000014])
-                        self.assertAlmostEqual(tuner.decode(memory)["kv"], 0.85)
+                        self.assertAlmostEqual(tuner.decode(memory)["kv"], 8.5)
                     else:
                         with self.assertRaises(ValueError):
                             tuner.main()

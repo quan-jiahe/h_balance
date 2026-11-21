@@ -10,7 +10,7 @@ static volatile uint16_t rx_tail;
 static uint8_t tx_buffer[256];
 static volatile uint16_t tx_head, tx_tail;
 static uint32_t pulse_finished_cycles, pulse_finished_ms;
-static bool pulse_sent;
+static bool pulse_sent, last_step_forward;
 
 /* Common-anode STEP input: idle high, pulse low. Clear CC1P for active high. */
 #define STEP_POLARITY TIM_CCER_CC1P
@@ -185,9 +185,10 @@ void board_led_set(BoardLed led, bool on)
 
 bool board_step_pulse(bool forward)
 {
-    /* Retain the original DIR hold, overlapped with work between scheduled pulses. */
+    /* Keep DIR stable after STEP. A pulse in the same direction leaves DIR unchanged. */
     /* SysTick also covers WFI intervals, where CPU cycle counting may pause. */
-    while (pulse_sent && (uint32_t)(board_millis() - pulse_finished_ms) < 3u &&
+    while (pulse_sent && forward != last_step_forward &&
+           (uint32_t)(board_millis() - pulse_finished_ms) < 3u &&
            (uint32_t)(DWT->CYCCNT - pulse_finished_cycles) < SystemCoreClock / 500u) { }
     GPIOE->BSRR = forward ? STEP_DIR_PIN : STEP_DIR_PIN << 16;
     TIM1->SR = 0;
@@ -202,6 +203,7 @@ bool board_step_pulse(bool forward)
     }
     pulse_finished_cycles = DWT->CYCCNT;
     pulse_finished_ms = board_millis();
+    last_step_forward = forward;
     pulse_sent = true;
     return (TIM1->SR & TIM_SR_UIF) != 0u;
 }

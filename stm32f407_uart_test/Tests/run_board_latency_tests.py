@@ -89,7 +89,7 @@ def main():
                 starts.append(wall_cycles)
                 timer_end = wall_cycles + 3200  # Existing 100 us setup + 100 us STEP.
             else: timer_end = None
-        elif addr == 0x40021018: directions.append(wall_cycles)
+        elif addr == 0x40021018: directions.append((wall_cycles, value))
         elif addr == 0xE0001004: cycles = value
     for addr in (0xE0001004, 0x40010000, address('ticks_ms')):
         cpu.hook_add(UC_HOOK_MEM_READ, timed_read, begin=addr, end=addr)
@@ -100,11 +100,12 @@ def main():
     failures, checks, done, first = struct.unpack('<IIII', cpu.mem_read(0x2001E000, 16))
     assert done == 0xF407B04D, 'Board test did not finish'
     assert failures == 0, (failures, checks, first)
-    assert len(starts) == 7 and len(completions) == 6
-    # Skip GPIO preload; every subsequent direction change follows a completed pulse.
-    assert len(directions) == 8
-    for index in range(1, 7):
-        assert directions[index + 1] - completions[index - 1] >= 32000, 'DIR hold violated'
+    assert len(starts) == 8 and len(completions) == 7
+    assert 32000 <= starts[1] - starts[0] < 33600, 'Same-direction pulse interval exceeded 2 ms'
+    assert len(directions) == 9
+    for index, (at, direction) in enumerate(directions[1:]):
+        if index and direction != directions[index][1]:
+            assert at - completions[index - 1] >= 32000, 'DIR hold violated'
     print(f'PASS: {checks} real-board driver checks, short pulse call, DIR hold, WFI, timer fault and cycle wrap')
     print('PASS: nonblocking USART3, FIFO order/wrap, whole-frame overflow, IRQ mask and simultaneous RX/TX')
 

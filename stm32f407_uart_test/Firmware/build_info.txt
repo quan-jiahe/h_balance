@@ -180,3 +180,24 @@ SHA256: d15bfff4a160c0f5b06a39d1f691bb0e3d025426cc4f9360264c1cce931d31c9
 OLED orientation for viewing from above: SSD1306 segment and COM scan remapped by 180 degrees.
 Keil AC6.24: 0 errors, 0 warnings. Physical OLED orientation remains to be checked.
 SHA256: 55b45bf41655215b2f714e812611b8f9a696b548f0d0ef9e8ff6525a897804f6
+
+Closed-loop STEP interval 2 ms, target slew 24 steps per observation. Startup interval remains 4 ms.
+Stationary off-target compensation accumulates at 3x the normal rate. Travel limits and anti-windup retained.
+Keil AC6.24: 0 errors, 0 warnings. Code=20428 RO-data=1800 RW-data=60 ZI-data=3308.
+471 control and protocol checks and 524 board register simulation checks passed. Hardware testing pending.
+SHA256: 82396910fea3a43b0620b5b362195b6d18aee0e32e0b99aa7b79c975ecbc5143
+
+Removed preset online tuning ranges. Finite float32 values and math domains are validated.
+Keil AC6.24: 0 errors, 0 warnings. Code=22164 RO-data=1712 RW-data=60 ZI-data=3308.
+487 Cortex-M checks and 4 SWD tuning tool checks passed. Hardware testing pending.
+SHA256: 003a54426c97ade045f1b7dc7858874b5b99e4f8c281ff524114fdbef1e1e318
+
+VOFA screenshot defaults: kp=0.5, kv=0.7, ki=0.6, gain=1.5, brake=1.4, max_speed=30,
+accel=10, ref_accel=120, kff=0, kff2=0, max_offset=150. Verified all eleven in the HEX.
+Keil AC6.24: 0 errors, 0 warnings. MODE2 model longest leg 7.293 s and MODE3 worst hold 10.57 mm exceed their limits.
+SHA256: 27d0392892c5b5ec1b30f75873d8e6c8001332d5dd306ebdd4268d213c5478a9
+
+SW3 restarts the selected mode even when it was already confirmed.
+Mode restart checks passed. The existing Mode 2 and Mode 3 performance simulation failures persist at the screenshot defaults.
+Keil AC6.24: 0 errors, 0 warnings. Hardware testing pending.
+SHA256: 0e28c0481f9209bb33b1551d55778317bbc36ccfd8eae32ebb956504a9b4727c

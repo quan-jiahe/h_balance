@@ -17,9 +17,8 @@ ROOT = Path(__file__).resolve().parents[1]
 CLI = Path(r"D:\STM32CubeCLT_1.21.0\STM32CubeProgrammer\bin\STM32_Programmer_CLI.exe")
 MAP = ROOT / "stm32f407_uart_test/MDK-ARM/Listings/CenterBalance/F407_K230_Center_Balance.map"
 FIELDS = ("kp", "kv", "ki", "gain", "brake", "max_speed", "accel", "ref_accel", "kff", "kff2", "max_offset")
-RANGES = ((0, 3), (0, 4), (0, 3), (0, 3), (1, 4), (1, 150), (1, 300),
-          (1, 500), (-3, 3), (-0.05, 0.05), (1, 300))
 FORMAT = "<II11f"
+FLOAT32_MAX = float.fromhex("0x1.fffffep127")
 
 
 def symbol_address(text):
@@ -36,9 +35,13 @@ def validate(name, value):
     if name not in FIELDS:
         raise ValueError("Unknown parameter: " + name)
     value = float(value)
-    low, high = RANGES[FIELDS.index(name)]
-    if not math.isfinite(value) or not low <= value <= high:
-        raise ValueError("%s must be in [%s, %s]" % (name, low, high))
+    if not -FLOAT32_MAX <= value <= FLOAT32_MAX:
+        raise ValueError(name + " must fit in a finite float32")
+    value = struct.unpack("<f", struct.pack("<f", value))[0]
+    if name == "accel" and value <= 0:
+        raise ValueError("accel must be positive")
+    if name in ("max_speed", "ref_accel", "max_offset") and value < 0:
+        raise ValueError(name + " must be nonnegative")
     return value
 
 

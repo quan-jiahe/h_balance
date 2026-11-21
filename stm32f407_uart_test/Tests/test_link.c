@@ -512,11 +512,21 @@ static void test_three_point_mode(void)
 
     observe_ball(&link, 0, 0);
     check(!strcmp(center_balance_three_point_status(&link, now_ms), "O DONE"), 27);
-    center_balance_key(&link, LINK_KEY_BACK, now_ms);
-    link.center_valid = false;
+    center_balance_button(&link, BOARD_SW1);
+    center_balance_button(&link, BOARD_SW2);
+    check(center_balance_selected_mode() == BALANCE_MODE_THREE_POINTS &&
+          !strcmp(center_balance_three_point_status(&link, now_ms), "O DONE"), 27);
     center_balance_button(&link, BOARD_SW3);
+    const unsigned before_restart = pulse_count;
+    center_balance_tick(&link, ++now_ms);
+    check(!strcmp(center_balance_three_point_status(&link, now_ms), "WAIT BALL") &&
+          pulse_count == before_restart, 24);
     for (unsigned i = 0; i < 240; ++i) { observe_ball(&link, 0, 0); }
     check(!strcmp(center_balance_three_point_status(&link, now_ms), "P1 MOVE"), 27);
+    observe_ball(&link, -50, 0);
+    check(!strcmp(center_balance_three_point_status(&link, now_ms), "P1 HOLD"), 27);
+    center_balance_button(&link, BOARD_SW3);
+    check(!strcmp(center_balance_three_point_status(&link, now_ms), "WAIT BALL"), 24);
     observe_ball(&link, -50, 0);
     check(!strcmp(center_balance_three_point_status(&link, now_ms), "P1 HOLD"), 27);
     link.center_valid = false;
@@ -572,13 +582,14 @@ static void test_mode3(void)
     check(mode3_status(&link, "STOP") && link.steps == stopped, 27);
     center_balance_button(&link, BOARD_SW3);
     for (unsigned i = 0; i < 16; ++i) { observe_ball(&link, 0, 0); }
+    const int32_t inward_limit = link.steps + (int32_t)g_balance_tuning.max_offset;
     for (unsigned i = 0; i < 27; ++i) { observe_ball(&link, -30, 0); }
     check(mode3_status(&link, "WAIT RELEASE"), 27);
     observe_ball(&link, -28, 10);
     for (unsigned i = 1; i < 182; ++i) { observe_ball(&link, -13, 0); }
     check(mode3_status(&link, "TIMEOUT"), 27);
     observe_ball(&link, -90, -25);
-    check(mode3_status(&link, "EDGE BRAKE") && center_balance_target_steps() > link.steps, 27);
+    check(mode3_status(&link, "EDGE BRAKE") && center_balance_target_steps() == inward_limit, 27);
 
     start_mode3(&link);
     observe_ball(&link, 89, 0);
@@ -597,7 +608,7 @@ static void test_mode3(void)
     check(mode3_status(&link, "EDGE BRAKE") && center_balance_target_steps() == 460, 27);
     const int32_t braking_steps = link.steps;
     observe_ball(&link, -85, 12);
-    check(mode3_status(&link, "EDGE BRAKE") && abs(center_balance_target_steps() - braking_steps) <= 12, 27);
+    check(mode3_status(&link, "EDGE BRAKE") && abs(center_balance_target_steps() - braking_steps) <= 24, 27);
     observe_ball(&link, -84, 12);
     check(!mode3_status(&link, "EDGE BRAKE"), 27);
 
@@ -612,6 +623,30 @@ static void test_mode3(void)
     check(mode3_status(&link, "VISION LOST") && center_balance_target_steps() == before_loss, 27);
     observe_ball(&link, 0, 0);
     check(mode3_status(&link, "VISION LOST"), 27);
+    center_balance_button(&link, BOARD_SW3);
+    center_balance_tick(&link, ++now_ms);
+    check(mode3_status(&link, "WAIT BALL"), 24);
+    for (unsigned i = 0; i < 12; ++i) { observe_ball(&link, 0, 0); }
+    check(mode3_status(&link, "PUSH BALL"), 24);
+}
+
+static void test_center_motor_rate(void)
+{
+    LinkTest link;
+    finish_center_startup(&link);
+    const int32_t start = link.steps;
+    const unsigned pulses = pulse_count;
+    link.center_error_mm = 30;
+    link.center_valid = true;
+    link.center_sample_ms = link.center_rx_ms = now_ms;
+    ++link.center_observations;
+    center_balance_tick(&link, now_ms);
+    check(center_balance_target_steps() == start - 24 && pulse_count == pulses, 24);
+    for (unsigned ms = 1; ms <= 48; ++ms) {
+        center_balance_tick(&link, ++now_ms);
+        check(pulse_count == pulses + ms / 2, 24);
+    }
+    check(link.steps == center_balance_target_steps(), 24);
 }
 
 static void test_center_stall_integral(void)
@@ -631,7 +666,7 @@ static void test_center_stall_integral(void)
         check(center_balance_target_steps() == 310, 24);
         for (unsigned i = 0; i < 30; ++i) { observe_ball(&link, x, 0); }
         const int ramped = center_balance_target_steps();
-        check(side ? ramped > 315 : ramped < 305, 24);
+        check(ramped == 310 + (side ? 29 : -29), 24);
         for (unsigned i = 0; i < 30; ++i) { observe_ball(&link, x, side ? 10 : -10); }
         check(center_balance_target_steps() == ramped, 24);
         observe_ball(&link, 0, side ? 40 : -40);
@@ -666,7 +701,14 @@ static void test_center_stall_integral(void)
     for (unsigned i = 0; i < 40; ++i) { observe_ball(&link, 30, 0); }
     check(center_balance_target_steps() == 310, 24);
     g_balance_tuning.gain = 1;
+    finish_center_startup(&link);
+    for (unsigned i = 0; i < 40; ++i) { observe_ball(&link, 30, 10); }
+    check(center_balance_target_steps() == 300, 24); /* Rolling away uses the original rate. */
+    finish_center_startup(&link);
+    for (unsigned i = 0; i < 40; ++i) { observe_ball(&link, 6, 0); }
+    check(center_balance_target_steps() == 290, 24); /* Stationary outside the hold band. */
     for (unsigned limit = 0; limit < 3; ++limit) {
+        g_balance_tuning.ki = 1;
         g_balance_tuning.kp = 2;
         g_balance_tuning.max_offset = limit ? 100 : 20;
         finish_center_startup(&link);
@@ -680,6 +722,7 @@ static void test_center_stall_integral(void)
         for (unsigned i = 0; i < 60; ++i) { observe_ball(&link, limit == 2 ? -30 : 30, 0); }
         check(center_balance_target_steps() == (limit == 1 ? 0 : (limit == 2 ? 650 : 290)), 24);
         g_balance_tuning.kp = 0;
+        g_balance_tuning.ki = 0;
         /* Allow the existing per-observation target slew to finish. */
         for (unsigned i = 0; i < 2; ++i) { observe_ball(&link, limit == 2 ? -30 : 30, 0); }
         check(abs(center_balance_target_steps() - anchor) <= 1, 24);
@@ -889,7 +932,7 @@ static void run_plant(LinkTest *link, BallPlant *plant, unsigned duration, unsig
         const int before = center_balance_target_steps();
         center_balance_tick(link, now_ms);
         if (report == 12 && ms < 1000) { saturated |= center_balance_target_steps() <= 270; }
-        valid_slew &= abs(center_balance_target_steps() - before) <= 12;
+        valid_slew &= abs(center_balance_target_steps() - before) <= 24;
         valid_travel &= link->steps >= 0 && link->steps <= 650;
         plant_integrate(link, plant);
         peak = fmaxf(peak, fabsf(plant->x));
@@ -1052,7 +1095,8 @@ static void test_vofa_tuning(void)
     check(g_balance_tuning.kp == 0.6f && tuning_channel(6) == 1 && tuning_channel(7) == 0.6f, 24);
     tuning_command(&link, " KV = 0.9\nki=0.1\n");
     check(g_balance_tuning.kv == 0.9f && g_balance_tuning.ki == 0.1f && tuning_channel(6) == 1, 24);
-    const char *bad[] = {"kp=nan\n", "kv=inf\n", "kp=-1\n", "max_offset=651\n",
+    const char *bad[] = {"kp=nan\n", "kv=inf\n", "ki=1e39\n", "accel=0\n",
+        "max_offset=-1\n", "max_speed=-1\n", "ref_accel=-1\n",
         "gain=1x\n", "magic=0\n", "dir=-1\n", "start\n", "kp=0.9;kv=1\n", "kp=\n"};
     const BalanceTuning valid = g_balance_tuning;
     for (unsigned i = 0; i < sizeof(bad) / sizeof(bad[0]); ++i) {
@@ -1105,6 +1149,20 @@ static void test_vofa_tuning(void)
     tuning_tx_full = false;
     vofa_tuning_tick(&link, now_ms + 201);
     check(tuning_frames == sent + 1 && tuning_channel(5) == 0, 24);
+    const char *expanded[] = {
+        "kp=5.5\n", "kv=8\n", "ki=-1\n", "gain=1e38\n", "brake=0.5\n",
+        "max_speed=200\n", "accel=400\n", "ref_accel=600\n", "kff=-4\n",
+        "kff2=0.1\n", "max_offset=651\n"
+    };
+    const float expected[] = {5.5f, 8, -1, 1e38f, 0.5f, 200, 400, 600, -4, 0.1f, 651};
+    for (unsigned i = 0; i < sizeof(expected) / sizeof(expected[0]); ++i) {
+        tuning_command(&link, expanded[i]);
+        check(tuning_channel(6) == 1 && tuning_channel(7 + i) == expected[i], 24);
+    }
+    for (unsigned i = 0; i < 28; ++i) { observe_ball(&link, -30, 0); }
+    check(center_balance_target_steps() == 650 && link.steps <= 650, 24);
+    for (unsigned i = 0; i < 28; ++i) { observe_ball(&link, 30, 0); }
+    check(center_balance_target_steps() == 0 && link.steps >= 0, 24);
     memset(overflow, 'x', 96);
     overflow[96] = 0;
     tuning_enqueue(overflow);
@@ -1197,6 +1255,7 @@ int main(void)
     test_three_point_mode();
     test_mode3();
     test_center_balance();
+    test_center_motor_rate();
     test_center_stall_integral();
     test_center_bias_continuity();
     test_center_saturation_recovery();
