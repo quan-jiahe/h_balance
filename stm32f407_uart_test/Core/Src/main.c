@@ -1,15 +1,25 @@
 #include "board.h"
 #include "link_test.h"
+#if defined(F407_CENTER_BALANCE) || defined(F407_OLED_TEST)
+#include "center_oled.h"
+#endif
 #ifdef F407_CENTER_BALANCE
 #include "center_balance.h"
-#include "center_oled.h"
-#else
+#elif !defined(F407_OLED_TEST)
 #include "pulse_cycle.h"
 #endif
 #include "stm32f4xx.h"
 
 int main(void)
 {
+#ifdef F407_OLED_TEST
+    board_init();
+    center_oled_init();
+    for (;;) {
+        center_oled_tick(NULL, board_millis());
+        __WFI();
+    }
+#else
     LinkTest link;
     uint8_t menu[LINK_MENU_SIZE];
     uint32_t last_menu_ms = 0;
@@ -65,4 +75,5 @@ int main(void)
 #endif
         __WFI();
     }
+#endif
 }

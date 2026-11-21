@@ -1,5 +1,9 @@
 # STM32F407VET6 ↔ 亚博 K230 通讯与单脉冲点动
 
+## OLED 上电测试
+
+用 Keil 打开 [F407_K230_UART.uvprojx](MDK-ARM/F407_K230_UART.uvprojx)，选择 **F407_K230_Center_Balance**，在 **Options for Target → C/C++ → Define** 加入 `F407_OLED_TEST` 后重新编译并烧录。OLED 接 3.3 V 和 GND，SCL 接 PB8，SDA 接 PB9。上电约一秒后屏幕应显示 `OLED OK`。该测试不发送电机脉冲，也不读取 IMU。恢复居中控制前，移除 `F407_OLED_TEST` 并重新编译。
+
 ## 钢球居中联调固件
 
 `Firmware/F407_K230_Center_Balance.hex` 使用现有 STEP/DIR 接线和 K230 识别程序。用 Keil MDK 5 打开 [F407_K230_UART.uvprojx](MDK-ARM/F407_K230_UART.uvprojx)，在目标下拉框选择 **F407_K230_Center_Balance** 并执行 **Rebuild**。工程配置使用 Arm Compiler 6.24。该目标已设置 `F407_CENTER_BALANCE`，输出到 `MDK-ARM/Objects/CenterBalance/F407_K230_Center_Balance.hex`。

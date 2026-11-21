@@ -1,11 +1,13 @@
 #include "center_oled.h"
-#ifdef F407_CENTER_BALANCE
+#if defined(F407_CENTER_BALANCE) || defined(F407_OLED_TEST)
 #include "board.h"
-#include "center_balance.h"
 #include "stm32f4xx.h"
+#include <string.h>
+#ifndef F407_OLED_TEST
+#include "center_balance.h"
 #include <math.h>
 #include <stdio.h>
-#include <string.h>
+#endif
 
 #define SCL (1u << 8)
 #define SDA (1u << 9)
@@ -20,10 +22,13 @@ enum { COLUMN_OFFSET = 2 };  /* Visible 128 columns of SH1106's 132-column RAM. 
 #endif
 
 static uint8_t address;
+static uint32_t next_chunk, frame_start;
+#ifndef F407_OLED_TEST
 static bool imu_ready, zeroed, at_level;
 static unsigned samples;
 static float sum, zero_angle, angle;
-static uint32_t level_since, last_sample, last_good, next_chunk, frame_start;
+static uint32_t level_since, last_sample, last_good;
+#endif
 static unsigned page, column;
 static bool clearing;
 static uint8_t angle_line[WIDTH];
@@ -89,7 +94,9 @@ void center_oled_init(void)
     GPIOB->PUPDR = (GPIOB->PUPDR & ~(15u << 16)) | (5u << 16);
     GPIOB->MODER = (GPIOB->MODER & ~(15u << 16)) | (5u << 16);
     next_chunk = board_millis() + OLED_POWER_UP_MS;
+#ifndef F407_OLED_TEST
     imu_ready = board_imu_init();
+#endif
 }
 
 static void probe_display(uint32_t now)
@@ -128,6 +135,7 @@ static void probe_display(uint32_t now)
     }
 }
 
+#ifndef F407_OLED_TEST
 static void update_angle(const LinkTest *link, uint32_t now)
 {
     const int32_t level = center_balance_level_steps();
@@ -159,6 +167,7 @@ static void update_angle(const LinkTest *link, uint32_t now)
     }
     last_good = now;
 }
+#endif
 
 static const uint8_t glyphs[][5] = {
     {0x3e,0x51,0x49,0x45,0x3e}, {0,0x42,0x7f,0x40,0},
@@ -176,8 +185,15 @@ static const uint8_t glyphs[][5] = {
     {0x01,0x01,0x7f,0x01,0x01}, {0x3f,0x40,0x38,0x40,0x3f},
     {0x61,0x51,0x49,0x45,0x43}, {0x08,0x08,0x3e,0x08,0x08},
     {0x08,0x08,0x08,0x08,0x08}, {0,0x60,0x60,0,0},
+#ifdef F407_OLED_TEST
+    {0x7f,0x08,0x14,0x22,0x41},  /* K */
+#endif
 };
+#ifdef F407_OLED_TEST
+static const char glyph_keys[] = "0123456789ABCDEFGILMNORSTWZ+-.K";
+#else
 static const char glyph_keys[] = "0123456789ABCDEFGILMNORSTWZ+-.";
+#endif
 
 static void draw_line(uint8_t *line, const char *text)
 {
@@ -188,6 +204,7 @@ static void draw_line(uint8_t *line, const char *text)
     }
 }
 
+#ifndef F407_OLED_TEST
 static void make_frame(uint32_t now)
 {
     char line[22];
@@ -204,6 +221,7 @@ static void make_frame(uint32_t now)
         draw_line(angle_line, line);
     }
 }
+#endif
 
 void center_oled_tick(const LinkTest *link, uint32_t now)
 {
@@ -212,12 +230,20 @@ void center_oled_tick(const LinkTest *link, uint32_t now)
         if ((int32_t)(now - next_chunk) >= 0) { probe_display(now); }
         return;
     }
+#ifdef F407_OLED_TEST
+    (void)link;
+#else
     update_angle(link, now);
+#endif
     if ((int32_t)(now - next_chunk) < 0) { return; }
     if (!clearing && column == 0) {
         if (now - frame_start < 250u) { return; }
         frame_start = now;
+#ifdef F407_OLED_TEST
+        draw_line(angle_line, "OLED OK");
+#else
         make_frame(now);
+#endif
     }
     const unsigned ram_column = column + COLUMN_OFFSET;
     const uint8_t command[] = {
