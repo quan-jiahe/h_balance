@@ -1,0 +1,43 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<ProjectOpt xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="project_optx.xsd">
+  <SchemaVersion>1.0</SchemaVersion>
+  <Header>### uVision Project, (C) Keil Software</Header>
+  <Target>
+    <TargetName>F103_K230_Center_Balance</TargetName>
+    <ToolsetNumber>0x4</ToolsetNumber>
+    <ToolsetName>ARM-ADS</ToolsetName>
+    <TargetOption>
+      <CLKADS>64000000</CLKADS>
+      <OPTTT>
+        <gFlags>1</gFlags>
+        <BeepAtEnd>0</BeepAtEnd>
+        <RunSim>0</RunSim>
+        <RunTarget>1</RunTarget>
+      </OPTTT>
+      <OPTFL>
+        <IsCurrentTarget>1</IsCurrentTarget>
+      </OPTFL>
+      <DebugOpt>
+        <uSim>0</uSim>
+        <uTrg>1</uTrg>
+        <tLdApp>1</tLdApp>
+        <tGomain>1</tGomain>
+        <nTsel>3</nTsel>
+        <pMon>BIN\CMSIS_AGDI.dll</pMon>
+      </DebugOpt>
+      <TargetDriverDllRegistry>
+        <SetRegEntry>
+          <Number>0</Number>
+          <Key>CMSIS_AGDI</Key>
+          <Name>-O206 -S6 -C0 -P00000000 -N00("ARM CoreSight SW-DP") -D00(1BA01477) -L00(0) -FO15 -FD20000000 -FC1000 -FN1 -FF0STM32F10x_128.FLM -FS08000000 -FL010000 -FP0($$Device:STM32F103C8$Flash\STM32F10x_128.FLM)</Name>
+        </SetRegEntry>
+      </TargetDriverDllRegistry>
+      <DebugDescription>
+        <Enable>0</Enable>
+        <EnableLog>0</EnableLog>
+        <Protocol>2</Protocol>
+        <DbgClock>100000</DbgClock>
+      </DebugDescription>
+    </TargetOption>
+  </Target>
+</ProjectOpt>

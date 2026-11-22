@@ -34,10 +34,14 @@ Listings/
 *.uvguix.*
 *.uvoptx
 !stm32f407_uart_test/MDK-ARM/F407_K230_UART.uvoptx
+!stm32f103c8_balance/MDK-ARM/F103_K230_Center_Balance.uvoptx
 *.build_log.htm
 /stm32f407_uart_test/MDK-ARM/DebugConfig/
 /stm32f407_uart_test/MDK-ARM/RTE/
+/stm32f103c8_balance/MDK-ARM/DebugConfig/
+/stm32f103c8_balance/MDK-ARM/RTE/
 !stm32f407_uart_test/Firmware/*.hex
+!stm32f103c8_balance/Firmware/*.hex
 
 # Download the upstream model with tools/download_steel_ball_model.py.
 /k230/kmodel/*.kmodel

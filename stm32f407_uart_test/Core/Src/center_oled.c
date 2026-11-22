@@ -2,7 +2,7 @@
 #ifdef F407_CENTER_BALANCE
 #include "board.h"
 #include "center_balance.h"
-#include "stm32f4xx.h"
+#include "board_mcu.h"
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -83,12 +83,18 @@ void center_oled_init(void)
 {
     CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
     DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+#if defined(STM32F103xB)
+    GPIOB->BSRR = SCL | SDA;
+    f103_gpio_config(GPIOB, 8u, F103_GPIO_OPEN_DRAIN);
+    f103_gpio_config(GPIOB, 9u, F103_GPIO_OPEN_DRAIN);
+#else
     RCC->AHB1ENR |= RCC_AHB1ENR_GPIOBEN;
     (void)RCC->AHB1ENR;
     GPIOB->OTYPER |= SCL | SDA;
     GPIOB->BSRR = SCL | SDA;
     GPIOB->PUPDR = (GPIOB->PUPDR & ~(15u << 16)) | (5u << 16);
     GPIOB->MODER = (GPIOB->MODER & ~(15u << 16)) | (5u << 16);
+#endif
     next_chunk = board_millis() + OLED_POWER_UP_MS;
     imu_ready = board_imu_init();
 }

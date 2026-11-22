@@ -7,7 +7,7 @@
 #else
 #include "pulse_cycle.h"
 #endif
-#include "stm32f4xx.h"
+#include "board_mcu.h"
 
 int main(void)
 {

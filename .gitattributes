@@ -1,0 +1,2 @@
+# Preserve the Keil output bytes so the published SHA256 is portable.
+stm32f103c8_balance/Firmware/*.hex -text

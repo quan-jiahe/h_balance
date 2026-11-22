@@ -14,7 +14,7 @@ import sys
 import xml.etree.ElementTree as ET
 
 from unicorn import Uc, UC_ARCH_ARM, UC_MODE_THUMB, UC_MODE_MCLASS, UC_HOOK_INTR
-from unicorn.arm_const import UC_ARM_REG_SP, UC_ARM_REG_XPSR
+from unicorn.arm_const import UC_ARM_REG_SP, UC_ARM_REG_XPSR, UC_CPU_ARM_CORTEX_M3
 
 
 def load_hex(path):
@@ -36,11 +36,12 @@ def load_hex(path):
 def main():
     args = argparse.ArgumentParser(description=__doc__)
     args.add_argument("--keil", required=True, type=Path, help="Path to UV4.exe")
+    args.add_argument("--f103", action="store_true", help="Run the shared tests on Cortex-M3")
     options = args.parse_args()
     root = Path(__file__).resolve().parents[1]
     repo = root.parent
     sys.path.insert(0, str(repo / "k230"))
-    build = root / "Tests/build"
+    build = root / ("Tests/build/f103" if options.f103 else "Tests/build")
     build.mkdir(parents=True, exist_ok=True)
     spec = importlib.util.spec_from_file_location("k230_protocol", repo / "k230/main.py")
     k230 = importlib.util.module_from_spec(spec)
@@ -68,13 +69,12 @@ def main():
         "static const uint8_t fixture_%s[] = {%s};" %
         (name, ",".join(str(byte) for byte in data)) for name, data in fixtures.items()
     ))
-    original = root / "MDK-ARM/F407_K230_UART.uvprojx"
+    original = (repo / "stm32f103c8_balance/MDK-ARM/F103_K230_Center_Balance.uvprojx"
+                if options.f103 else root / "MDK-ARM/F407_K230_UART.uvprojx")
     tree = ET.parse(original)
     targets = tree.find("./Targets")
-    test_target = targets.find("./Target[TargetName='F407_K230_UART']")
-    for target in list(targets):
-        if target is not test_target:
-            targets.remove(target)
+    for target in list(targets)[1:]:
+        targets.remove(target)
     for tag in ("FilePath", "ScatterFile"):
         for element in tree.findall(".//" + tag):
             element.text = str((original.parent / element.text.replace("\\", "/")).resolve())
@@ -84,6 +84,8 @@ def main():
     # Keep the growing test harness within the installed 32 KiB linker license.
     controls = tree.find(".//Cads/VariousControls/MiscControls")
     controls.text = (controls.text or "") + " -Oz"
+    if options.f103:
+        tree.find(".//Cads/VariousControls/Define").text = "STM32F103xB"
     files = tree.find(".//Group[GroupName='Application']/Files")
     for element in list(files):
         if element.findtext("FileName") in ("board.c", "vofa_uart.c"):
@@ -106,6 +108,8 @@ def main():
     assert process.returncode == 0, "Keil test build failed"
     memory = load_hex(build / "Objects/ProtocolTest.hex")
     cpu = Uc(UC_ARCH_ARM, UC_MODE_THUMB | UC_MODE_MCLASS)
+    if options.f103:
+        cpu.ctl_set_cpu_model(UC_CPU_ARM_CORTEX_M3)
     cpu.mem_map(0x08000000, 0x80000)
     cpu.mem_map(0x20000000, 0x20000)
     cpu.mem_map(0xE000E000, 0x1000)
@@ -116,7 +120,8 @@ def main():
     cpu.reg_write(UC_ARM_REG_SP, stack)
     cpu.reg_write(UC_ARM_REG_XPSR, 0x01000000)
     cpu.hook_add(UC_HOOK_INTR, lambda emulator, interrupt, user: emulator.emu_stop())
-    cpu.mem_write(0xE000ED88, struct.pack("<I", 0x00F00000))
+    if not options.f103:
+        cpu.mem_write(0xE000ED88, struct.pack("<I", 0x00F00000))
     cpu.emu_start(entry, 0, count=600000000)
     failures, checks, done, first_failure = struct.unpack("<IIII", cpu.mem_read(0x2001E000, 16))
     model_results = []

@@ -4,6 +4,8 @@
 
 ## 工程现状
 
+- 新增 `stm32f103c8_balance/`，对照 QZ_AIOT v2.0 扩展板迁移 F103C8T6。F103/F407 共用稳球、模式、K230、OLED 和 VOFA 代码。F103 使用 USART2（PA2/PA3）接 K230、板载 CH340 接 VOFA、PA8/PA1 输出 STEP/DIR。F103 Keil 编译通过，545 项寄存器仿真通过，F407 重编译 HEX 与原文件相同。两版模型结果一致，MODE2 最慢单段 7.128 s、MODE3 一侧保持误差 8.33 mm。实机未烧录，接线见该目录 README。
+
 - MODE1 实机调参后将 `brake=2.00`、`max_speed=20`、`accel=10`、`brake_speed_gain=0.90` 固化为 F407 共用默认值。Keil AC6.24 编译 0 错误 0 警告，已核对 HEX 中的 12 项默认值。同侧 +50 mm 对照中，单独提高刹车倍率后最大反向摆幅从 40 mm 降至 20 mm。共用这组参数时，MODE2 仿真最慢段 7.128 s，MODE3 一侧最大保持误差 8.33 mm，两项仍超出要求。ST-LINK 未枚举，尚未烧录此 HEX。
 
 - 闭环静摩擦补偿在偏差至少 10 mm、球速绝对值不超过 4 mm/s 持续约 0.20 s 后升至 5.5 倍。偏差 4 mm 至小于 10 mm 时沿用原缓抬。Keil AC6.24 编译 0 错误 0 警告，507 项 Cortex-M 和 29 项 Python 检查通过。仿真 MODE2 最慢一段 6.930 s，MODE3 保持窗最大偏差 7.79 mm。新版 HEX 已生成，实机起滚待测。

@@ -1,7 +1,27 @@
 #include "board.h"
-#include "stm32f4xx.h"
+#include "board_mcu.h"
 
-uint32_t SystemCoreClock = 16000000u;
+#if defined(STM32F103xB)
+#define CORE_CLOCK_HZ F103_HCLK_HZ
+#define LINK_CLOCK_HZ F103_PCLK1_HZ
+#define LINK_USART USART2
+#define LINK_USART_IRQ USART2_IRQn
+#define LINK_USART_HANDLER USART2_IRQHandler
+#define STEP_DIR_PORT GPIOA
+#define STEP_DIR_PIN (1u << 1)
+#define IMU_CS (1u << 12)
+#else
+#define CORE_CLOCK_HZ 16000000u
+#define LINK_CLOCK_HZ CORE_CLOCK_HZ
+#define LINK_USART USART3
+#define LINK_USART_IRQ USART3_IRQn
+#define LINK_USART_HANDLER USART3_IRQHandler
+#define STEP_DIR_PORT GPIOE
+#define STEP_DIR_PIN (1u << 7)
+#define IMU_CS (1u << 0)
+#endif
+
+uint32_t SystemCoreClock = CORE_CLOCK_HZ;
 static volatile uint32_t ticks_ms;
 static volatile uint32_t uart_errors;
 static uint8_t rx_buffer[256];
@@ -14,13 +34,18 @@ static bool pulse_sent, last_step_forward;
 
 /* Common-anode STEP input: idle high, pulse low. Clear CC1P for active high. */
 #define STEP_POLARITY TIM_CCER_CC1P
-#define STEP_DIR_PIN (1u << 7)
 
-enum { FIRST_BUTTON_PIN = 3, BUTTON_DEBOUNCE_MS = 20 };
+enum { BUTTON_DEBOUNCE_MS = 20 };
+#if defined(STM32F103xB)
+static GPIO_TypeDef *const button_ports[BOARD_BUTTON_COUNT] = {GPIOA, GPIOA, GPIOB, GPIOB, GPIOB};
+static const uint8_t button_pins[BOARD_BUTTON_COUNT] = {11u, 15u, 3u, 4u, 5u};
+#else
+enum { FIRST_BUTTON_PIN = 3 };
 #define BUTTON_MODE_MASK (((1u << (2u * BOARD_BUTTON_COUNT)) - 1u) << (2u * FIRST_BUTTON_PIN))
 #define LED3_PIN (1u << 10)
 #define LED4_PIN (1u << 11)
 #define LED5_PIN (1u << 8)
+#endif
 
 typedef struct {
     uint32_t raw_changed_ms, pressed_ms;
@@ -33,21 +58,33 @@ static ButtonState buttons[BOARD_BUTTON_COUNT];
 
 void SystemInit(void)
 {
+#if !defined(STM32F103xB)
     SCB->CPACR |= (0xFu << 20);
+#endif
     RCC->CR |= RCC_CR_HSION;
     while (!(RCC->CR & RCC_CR_HSIRDY)) { }
     RCC->CFGR &= ~RCC_CFGR_SW;
     while ((RCC->CFGR & RCC_CFGR_SWS) != 0u) { }
     RCC->CFGR = 0;
     RCC->CR &= ~(RCC_CR_PLLON | RCC_CR_HSEON | RCC_CR_CSSON);
+#if defined(STM32F103xB)
+    while (RCC->CR & RCC_CR_PLLRDY) { }
+    FLASH->ACR = FLASH_ACR_PRFTBE | FLASH_ACR_LATENCY_2;
+    RCC->CFGR = RCC_CFGR_PPRE1_DIV2 | RCC_CFGR_PLLMULL16;
+    RCC->CR |= RCC_CR_PLLON;
+    while (!(RCC->CR & RCC_CR_PLLRDY)) { }
+    RCC->CFGR |= RCC_CFGR_SW_PLL;
+    while ((RCC->CFGR & RCC_CFGR_SWS) != RCC_CFGR_SWS_PLL) { }
+#else
     FLASH->ACR = 0;
+#endif
     SCB->VTOR = FLASH_BASE;
     /* SystemInit runs before C data initialization; SystemCoreClock is initialized later. */
 }
 
 void SystemCoreClockUpdate(void)
 {
-    SystemCoreClock = 16000000u;
+    SystemCoreClock = CORE_CLOCK_HZ;
 }
 
 static void step_init(void)
@@ -55,13 +92,15 @@ static void step_init(void)
     CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
     DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
     pulse_sent = false;
+#if !defined(STM32F103xB)
     RCC->AHB1ENR |= RCC_AHB1ENR_GPIOEEN;
+#endif
     RCC->APB2ENR |= RCC_APB2ENR_TIM1EN;
     (void)RCC->APB2ENR;
 
     /* PWM2 holds STEP idle until CCR1, then drives it until the one-pulse update. */
     TIM1->CR1 = TIM_CR1_OPM;
-    TIM1->PSC = 15u;  /* 16 MHz TIM1 clock, 1 us per count. */
+    TIM1->PSC = CORE_CLOCK_HZ / 1000000u - 1u;
     TIM1->ARR = 199u;
     TIM1->CCR1 = 100u;
     TIM1->CCMR1 = TIM_CCMR1_OC1M_0 | TIM_CCMR1_OC1M_1 | TIM_CCMR1_OC1M_2;
@@ -69,16 +108,29 @@ static void step_init(void)
     TIM1->CCER = TIM_CCER_CC1E | STEP_POLARITY;
     TIM1->BDTR = TIM_BDTR_MOE;
 
-    /* Attach PE9 to the idle timer output and PE7 to the direction latch. */
+    /* Attach STEP to the timer only after its output has reached idle. */
+#if defined(STM32F103xB)
+    GPIOA->BSRR = STEP_DIR_PIN;
+    f103_gpio_config(GPIOA, 1u, F103_GPIO_OUTPUT);
+    f103_gpio_config(GPIOA, 8u, F103_GPIO_ALTERNATE);
+#else
     GPIOE->BSRR = STEP_DIR_PIN;
     GPIOE->OTYPER &= ~(STEP_DIR_PIN | (1u << 9));
     GPIOE->AFR[1] = (GPIOE->AFR[1] & ~(15u << 4)) | (1u << 4);
     GPIOE->MODER = (GPIOE->MODER & ~((3u << 14) | (3u << 18)))
                    | (1u << 14) | (2u << 18);
+#endif
 }
 
 static void panel_io_init(void)
 {
+#if defined(STM32F103xB)
+    for (unsigned i = 0; i < BOARD_BUTTON_COUNT; ++i) {
+        GPIO_TypeDef *const port = button_ports[i];
+        port->BSRR = 1u << button_pins[i];
+        f103_gpio_config(port, button_pins[i], F103_GPIO_PULL);
+    }
+#else
     const uint32_t pd_led_modes = (3u << 20) | (3u << 22);
     const uint32_t pa_led_mode = 3u << 16;
 
@@ -96,10 +148,24 @@ static void panel_io_init(void)
     GPIOD->MODER = (GPIOD->MODER & ~(BUTTON_MODE_MASK | pd_led_modes)) |
                    (1u << 20) | (1u << 22);
     GPIOA->MODER = (GPIOA->MODER & ~pa_led_mode) | (1u << 16);
+#endif
 }
 
 void board_init(void)
 {
+#if defined(STM32F103xB)
+    RCC->APB2ENR |= RCC_APB2ENR_AFIOEN | RCC_APB2ENR_IOPAEN | RCC_APB2ENR_IOPBEN;
+    (void)RCC->APB2ENR;
+    /* KEY2–4 use JTAG pins. Leave PA13/PA14 available for SWD. */
+    AFIO->MAPR = AFIO_MAPR_SWJ_CFG_JTAGDISABLE;
+    RCC->APB1ENR |= RCC_APB1ENR_USART2EN;
+    (void)RCC->APB1ENR;
+    RCC->APB1RSTR |= RCC_APB1RSTR_USART2RST;
+    RCC->APB1RSTR &= ~RCC_APB1RSTR_USART2RST;
+    f103_gpio_config(GPIOA, 2u, F103_GPIO_ALTERNATE);
+    GPIOA->BSRR = 1u << 3;
+    f103_gpio_config(GPIOA, 3u, F103_GPIO_PULL);
+#else
     RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN | RCC_AHB1ENR_GPIODEN;
     (void)RCC->AHB1ENR;
     RCC->APB1ENR |= RCC_APB1ENR_USART3EN;
@@ -117,12 +183,13 @@ void board_init(void)
                    | (1u << 16) | (1u << 18);
     GPIOD->AFR[1] = (GPIOD->AFR[1] & ~0xFFu) | 0x77u;
 
-    USART3->BRR = (16000000u + 115200u / 2u) / 115200u;
-    USART3->CR2 = 0;
-    USART3->CR3 = 0;
-    NVIC_SetPriority(USART3_IRQn, 1);
-    NVIC_EnableIRQ(USART3_IRQn);
-    USART3->CR1 = USART_CR1_UE | USART_CR1_TE | USART_CR1_RE | USART_CR1_RXNEIE;
+#endif
+    LINK_USART->BRR = (LINK_CLOCK_HZ + 115200u / 2u) / 115200u;
+    LINK_USART->CR2 = 0;
+    LINK_USART->CR3 = 0;
+    NVIC_SetPriority(LINK_USART_IRQ, 1);
+    NVIC_EnableIRQ(LINK_USART_IRQ);
+    LINK_USART->CR1 = USART_CR1_UE | USART_CR1_TE | USART_CR1_RE | USART_CR1_RXNEIE;
     tx_head = tx_tail = 0;
     (void)SysTick_Config(SystemCoreClock / 1000u);
     panel_io_init();
@@ -131,10 +198,16 @@ void board_init(void)
 
 void board_buttons_poll(uint32_t now_ms)
 {
+#if !defined(STM32F103xB)
     const uint32_t input = GPIOD->IDR;
+#endif
     for (unsigned i = 0; i < BOARD_BUTTON_COUNT; ++i) {
         ButtonState *const state = &buttons[i];
+#if defined(STM32F103xB)
+        const bool pressed = (button_ports[i]->IDR & (1u << button_pins[i])) == 0u;
+#else
         const bool pressed = (input & (1u << (FIRST_BUTTON_PIN + i))) == 0u;
+#endif
         if (pressed != state->raw_pressed) {
             state->raw_pressed = pressed;
             state->raw_changed_ms = now_ms;
@@ -170,6 +243,14 @@ bool board_button_take_press_at(BoardButton button, uint32_t *pressed_ms)
 
 void board_led_set(BoardLed led, bool on)
 {
+    if ((unsigned)led >= BOARD_LED_COUNT) { return; }
+#if defined(STM32F103xB)
+    /* Optional external indicators on the pin headers. */
+    static const uint8_t pins[BOARD_LED_COUNT] = {0u, 1u, 7u};
+    const uint32_t pin = 1u << pins[led];
+    GPIOB->BSRR = on ? pin : pin << 16;
+    f103_gpio_config(GPIOB, pins[led], F103_GPIO_OUTPUT);
+#else
     static const struct {
         GPIO_TypeDef *port;
         uint32_t pin;
@@ -178,9 +259,9 @@ void board_led_set(BoardLed led, bool on)
         [BOARD_LED4] = {GPIOD, LED4_PIN},
         [BOARD_LED5] = {GPIOA, LED5_PIN}
     };
-    if ((unsigned)led >= BOARD_LED_COUNT) { return; }
     const uint32_t pin = led_gpio[led].pin;
     led_gpio[led].port->BSRR = on ? pin : pin << 16;
+#endif
 }
 
 bool board_step_pulse(bool forward)
@@ -190,7 +271,7 @@ bool board_step_pulse(bool forward)
     while (pulse_sent && forward != last_step_forward &&
            (uint32_t)(board_millis() - pulse_finished_ms) < 3u &&
            (uint32_t)(DWT->CYCCNT - pulse_finished_cycles) < SystemCoreClock / 500u) { }
-    GPIOE->BSRR = forward ? STEP_DIR_PIN : STEP_DIR_PIN << 16;
+    STEP_DIR_PORT->BSRR = forward ? STEP_DIR_PIN : STEP_DIR_PIN << 16;
     TIM1->SR = 0;
     TIM1->CR1 = TIM_CR1_OPM | TIM_CR1_CEN;
     const uint32_t start = board_millis();
@@ -208,7 +289,6 @@ bool board_step_pulse(bool forward)
     return (TIM1->SR & TIM_SR_UIF) != 0u;
 }
 
-#define IMU_CS (1u << 0)
 #define IMU_WHO_AM_I 0x72u
 #define IMU_ID 0xE9u
 #define IMU_INT1_STATUS 0x19u
@@ -260,14 +340,24 @@ static void delay_ms(uint32_t duration)
 
 bool board_imu_init(void)
 {
+#if !defined(STM32F103xB)
     RCC->AHB1ENR |= RCC_AHB1ENR_GPIOBEN;
+#endif
     RCC->APB1ENR |= RCC_APB1ENR_SPI2EN;
     (void)RCC->APB1ENR;
     GPIOB->BSRR = IMU_CS;
+#if defined(STM32F103xB)
+    f103_gpio_config(GPIOB, 12u, F103_GPIO_OUTPUT);
+    f103_gpio_config(GPIOB, 13u, F103_GPIO_ALTERNATE);
+    f103_gpio_config(GPIOB, 14u, F103_GPIO_FLOATING);
+    f103_gpio_config(GPIOB, 15u, F103_GPIO_ALTERNATE);
+    SPI2->CR1 = SPI_CR1_MSTR | SPI_CR1_SSM | SPI_CR1_SSI | SPI_CR1_BR_2;
+#else
     GPIOB->OTYPER &= ~(IMU_CS | (7u << 13));
     GPIOB->AFR[1] = (GPIOB->AFR[1] & ~(0xFFFu << 20)) | (0x555u << 20);
     GPIOB->MODER = (GPIOB->MODER & ~((0x3Fu << 26) | 3u)) | (0x2Au << 26) | 1u;
     SPI2->CR1 = SPI_CR1_MSTR | SPI_CR1_SSM | SPI_CR1_SSI | SPI_CR1_BR_1 | SPI_CR1_BR_0;
+#endif
     SPI2->CR1 |= SPI_CR1_SPE;  /* Mode 0, 1 MHz, four wires. */
 
     delay_ms(10);
@@ -312,12 +402,12 @@ void SysTick_Handler(void)
     ++ticks_ms;
 }
 
-void USART3_IRQHandler(void)
+void LINK_USART_HANDLER(void)
 {
-    const uint32_t status = USART3->SR;
+    const uint32_t status = LINK_USART->SR;
     const uint32_t errors = USART_SR_ORE | USART_SR_FE | USART_SR_NE | USART_SR_PE;
     if (status & (USART_SR_RXNE | errors)) {
-        const uint8_t byte = (uint8_t)USART3->DR;
+        const uint8_t byte = (uint8_t)LINK_USART->DR;
         if (status & errors) {
             ++uart_errors;
         } else {
@@ -331,11 +421,11 @@ void USART3_IRQHandler(void)
             }
         }
     }
-    if ((status & USART_SR_TXE) && (USART3->CR1 & USART_CR1_TXEIE)) {
+    if ((status & USART_SR_TXE) && (LINK_USART->CR1 & USART_CR1_TXEIE)) {
         if (tx_tail == tx_head) {
-            USART3->CR1 &= ~USART_CR1_TXEIE;
+            LINK_USART->CR1 &= ~USART_CR1_TXEIE;
         } else {
-            USART3->DR = tx_buffer[tx_tail];
+            LINK_USART->DR = tx_buffer[tx_tail];
             tx_tail = (uint16_t)((tx_tail + 1u) & 255u);
         }
     }
@@ -380,6 +470,6 @@ void board_uart_write(const uint8_t *data, size_t length)
     __disable_irq();
     __DMB();
     tx_head = head;
-    USART3->CR1 |= USART_CR1_TXEIE;
+    LINK_USART->CR1 |= USART_CR1_TXEIE;
     if (!mask) { __enable_irq(); }
 }

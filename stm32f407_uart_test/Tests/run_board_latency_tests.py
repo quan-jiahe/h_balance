@@ -7,17 +7,19 @@ import subprocess
 import xml.etree.ElementTree as ET
 
 from unicorn import Uc, UC_ARCH_ARM, UC_MODE_THUMB, UC_MODE_MCLASS, UC_HOOK_INTR, UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE
-from unicorn.arm_const import UC_ARM_REG_SP, UC_ARM_REG_XPSR
+from unicorn.arm_const import UC_ARM_REG_SP, UC_ARM_REG_XPSR, UC_CPU_ARM_CORTEX_M3
 from run_protocol_tests import load_hex
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--keil', required=True)
+    parser.add_argument('--f103', action='store_true')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
-    original = root / 'MDK-ARM/F407_K230_UART.uvprojx'
-    build = root / 'Tests/build/board_latency'
+    original = (root.parent / 'stm32f103c8_balance/MDK-ARM/F103_K230_Center_Balance.uvprojx'
+                if args.f103 else root / 'MDK-ARM/F407_K230_UART.uvprojx')
+    build = root / ('Tests/build/f103/board_latency' if args.f103 else 'Tests/build/board_latency')
     build.mkdir(parents=True, exist_ok=True)
     tree = ET.parse(original)
     targets = tree.find('Targets')
@@ -35,7 +37,8 @@ def main():
         if node.findtext('FileName') == 'main.c':
             node.find('FileName').text = 'test_board_latency.c'
             node.find('FilePath').text = str(root / 'Tests/test_board_latency.c')
-        elif node.findtext('FileName') != 'board.c': files.remove(node)
+        elif node.findtext('FileName') != 'board.c' and not (args.f103 and node.findtext('FileName') == 'vofa_uart.c'):
+            files.remove(node)
     tree.find('.//OutputName').text = 'BoardLatency'
     tree.find('.//OutputDirectory').text = str(build / 'Objects') + '\\'
     tree.find('.//ListingPath').text = str(build / 'Listings') + '\\'
@@ -53,6 +56,8 @@ def main():
         return int(re.search(r'^\s*' + name + r'\s+(0x[0-9a-fA-F]+)\s', symbols, re.M)[1], 16)
     memory = load_hex(build / 'Objects/BoardLatency.hex')
     cpu = Uc(UC_ARCH_ARM, UC_MODE_THUMB | UC_MODE_MCLASS)
+    if args.f103:
+        cpu.ctl_set_cpu_model(UC_CPU_ARM_CORTEX_M3)
     for base, size in ((0x08000000, 0x80000), (0x20000000, 0x20000), (0x40000000, 0x30000),
                        (0xE0001000, 0x1000), (0xE000E000, 0x1000)):
         cpu.mem_map(base, size)
@@ -61,39 +66,55 @@ def main():
     stack, entry = struct.unpack_from('<II', flash)
     cpu.reg_write(UC_ARM_REG_SP, stack)
     cpu.reg_write(UC_ARM_REG_XPSR, 0x01000000)
-    cpu.mem_write(0x40023800, struct.pack('<I', 3))
+    cycles_per_us = 64 if args.f103 else 16
+    timer_cr = 0x40012C00 if args.f103 else 0x40010000
+    dir_bsrr = 0x40010810 if args.f103 else 0x40021018
+    rcc_cr = 0x40021000 if args.f103 else 0x40023800
+    cpu.mem_write(rcc_cr, struct.pack('<I', 3))
     cycles = wall_cycles = 0
     timer_end = None
     completions, directions, starts = [], [], []
     def word(addr): return struct.unpack('<I', cpu.mem_read(addr, 4))[0]
     def write_word(addr, value): cpu.mem_write(addr, struct.pack('<I', value & 0xFFFFFFFF))
+    def clock_read(cpu, access, addr, size, value, user):
+        if addr == rcc_cr:
+            control = word(addr)
+            write_word(addr, (control & ~(1 << 25)) | ((control & (1 << 24)) << 1))
+        else:
+            config = word(addr)
+            write_word(addr, (config & ~12) | ((config & 3) << 2))
+    if args.f103:
+        for addr in (rcc_cr, rcc_cr + 4):
+            cpu.hook_add(UC_HOOK_MEM_READ, clock_read, begin=addr, end=addr)
+
     def timed_read(cpu, access, addr, size, value, user):
         nonlocal cycles, wall_cycles, timer_end
         slept = word(address('test_sleep_ms'))
         if slept:
-            wall_cycles += slept * 16000
+            wall_cycles += slept * 1000 * cycles_per_us
             write_word(address('test_sleep_ms'), 0)
-        cycles += 80  # Deterministic 5 us virtual progress per poll.
-        wall_cycles += 80
-        write_word(address('ticks_ms'), wall_cycles // 16000)
+        cycles += 5 * cycles_per_us
+        wall_cycles += 5 * cycles_per_us
+        write_word(address('ticks_ms'), wall_cycles // (1000 * cycles_per_us))
         write_word(0xE0001004, cycles)
         if timer_end is not None and wall_cycles >= timer_end and not word(address('test_timer_stuck')):
-            write_word(0x40010000, word(0x40010000) & ~1)
-            write_word(0x40010010, word(0x40010010) | 1)
+            write_word(timer_cr, word(timer_cr) & ~1)
+            write_word(timer_cr + 0x10, word(timer_cr + 0x10) | 1)
             completions.append(wall_cycles)
             timer_end = None
     def peripheral_write(cpu, access, addr, size, value, user):
         nonlocal cycles, timer_end
-        if addr == 0x40010000:
+        if addr == timer_cr:
             if value & 1:
                 starts.append(wall_cycles)
-                timer_end = wall_cycles + 3200  # Existing 100 us setup + 100 us STEP.
+                timer_end = wall_cycles + 200 * cycles_per_us
             else: timer_end = None
-        elif addr == 0x40021018: directions.append((wall_cycles, value))
+        elif addr == dir_bsrr and value in ((2, 2 << 16) if args.f103 else (128, 128 << 16)):
+            directions.append((wall_cycles, value))
         elif addr == 0xE0001004: cycles = value
-    for addr in (0xE0001004, 0x40010000, address('ticks_ms')):
+    for addr in (0xE0001004, timer_cr, address('ticks_ms')):
         cpu.hook_add(UC_HOOK_MEM_READ, timed_read, begin=addr, end=addr)
-    for addr in (0x40010000, 0x40021018, 0xE0001004):
+    for addr in (timer_cr, dir_bsrr, 0xE0001004):
         cpu.hook_add(UC_HOOK_MEM_WRITE, peripheral_write, begin=addr, end=addr)
     cpu.hook_add(UC_HOOK_INTR, lambda cpu, *unused: cpu.emu_stop())
     cpu.emu_start(entry, 0, count=5000000)
@@ -101,13 +122,14 @@ def main():
     assert done == 0xF407B04D, 'Board test did not finish'
     assert failures == 0, (failures, checks, first)
     assert len(starts) == 8 and len(completions) == 7
-    assert 32000 <= starts[1] - starts[0] < 33600, 'Same-direction pulse interval exceeded 2 ms'
+    assert 2000 <= (starts[1] - starts[0]) / cycles_per_us < 2100, 'Same-direction pulse interval exceeded 2 ms'
     assert len(directions) == 9
     for index, (at, direction) in enumerate(directions[1:]):
         if index and direction != directions[index][1]:
-            assert at - completions[index - 1] >= 32000, 'DIR hold violated'
+            assert at - completions[index - 1] >= 2000 * cycles_per_us, 'DIR hold violated'
     print(f'PASS: {checks} real-board driver checks, short pulse call, DIR hold, WFI, timer fault and cycle wrap')
-    print('PASS: nonblocking USART3, FIFO order/wrap, whole-frame overflow, IRQ mask and simultaneous RX/TX')
+    uart = 'USART2' if args.f103 else 'USART3'
+    print(f'PASS: nonblocking {uart}, FIFO order/wrap, whole-frame overflow, IRQ mask and simultaneous RX/TX')
 
 
 if __name__ == '__main__':

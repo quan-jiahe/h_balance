@@ -1,5 +1,5 @@
 #include "vofa_uart.h"
-#include "stm32f4xx.h"
+#include "board_mcu.h"
 
 static uint8_t rx[128], tx[256];
 static volatile uint16_t rx_head, rx_tail, tx_head, tx_tail;
@@ -7,19 +7,30 @@ static volatile uint32_t errors;
 
 void vofa_uart_init(void)
 {
+#if defined(STM32F103xB)
+    const uint32_t clock_hz = F103_HCLK_HZ;
+#else
+    const uint32_t clock_hz = 16000000u;
     RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
+#endif
     RCC->APB2ENR |= RCC_APB2ENR_USART1EN;
     (void)RCC->APB2ENR;
     RCC->APB2RSTR |= RCC_APB2RSTR_USART1RST;
     RCC->APB2RSTR &= ~RCC_APB2RSTR_USART1RST;
+#if defined(STM32F103xB)
+    f103_gpio_config(GPIOA, 9u, F103_GPIO_ALTERNATE);
+    GPIOA->BSRR = 1u << 10;
+    f103_gpio_config(GPIOA, 10u, F103_GPIO_PULL);
+#else
     GPIOA->MODER = (GPIOA->MODER & ~((3u << 18) | (3u << 20))) | (2u << 18) | (2u << 20);
     GPIOA->OTYPER &= ~((1u << 9) | (1u << 10));
     GPIOA->OSPEEDR = (GPIOA->OSPEEDR & ~((3u << 18) | (3u << 20))) | (2u << 18) | (2u << 20);
     GPIOA->PUPDR = (GPIOA->PUPDR & ~((3u << 18) | (3u << 20))) | (1u << 18) | (1u << 20);
     GPIOA->AFR[1] = (GPIOA->AFR[1] & ~(0xFFu << 4)) | (0x77u << 4);
+#endif
     rx_head = rx_tail = tx_head = tx_tail = 0;
     errors = 0;
-    USART1->BRR = (16000000u + 115200u / 2u) / 115200u;
+    USART1->BRR = (clock_hz + 115200u / 2u) / 115200u;
     USART1->CR2 = USART1->CR3 = 0;
     NVIC_SetPriority(USART1_IRQn, 2);
     NVIC_EnableIRQ(USART1_IRQn);
