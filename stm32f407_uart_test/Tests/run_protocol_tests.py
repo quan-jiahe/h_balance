@@ -158,14 +158,14 @@ def main():
     assert decoder.menu_lines[1:] == ["MOTOR:STOP", "RANGE:0-650", "STEP:+0"]
     decoder.feed(bytes(cpu.mem_read(0x2001E380, 95)))
     assert decoder.menu_lines[1:3] == ["BAL: S2 ZERO", "X:+30 V:+0 mm/s"]
-    vofa_packet = bytes(cpu.mem_read(0x2001E480, 76))
+    vofa_packet = bytes(cpu.mem_read(0x2001E480, 80))
     assert vofa_packet[-4:] == bytes.fromhex("0000807f")
-    channels = struct.unpack("<18f", vofa_packet[:-4])
+    channels = struct.unpack("<19f", vofa_packet[:-4])
     assert channels[:2] == (12, -7) and channels[2:6] == (310, 310, 1, 1)
     assert channels[6] == 1
-    expected_parameters = (0.6, 0.9, 0.1, 1.2, 1.8, 30, 50, 60, -0.2, -0.002, 100)
+    expected_parameters = (0.6, 0.9, 0.1, 1.2, 1.8, 30, 50, 60, -0.2, -0.002, 100, 0.75)
     assert all(abs(actual - expected) < 1e-5 for actual, expected in zip(channels[7:], expected_parameters))
-    print("PASS: VOFA JustFloat 18 channels, expanded RAM tuning range, value validation, timeout and nonblocking telemetry")
+    print("PASS: VOFA JustFloat 19 channels, expanded RAM tuning range, value validation, timeout and nonblocking telemetry")
     print(f"PASS: {checks} C checks; real K230 packets -> C parser -> real K230 decoder")
     print("PASS: bad CRC, noise, truncated frames, key limits, tick wrap and link timeout")
     print("PASS: jog direction, one pulse per valid command, count and pulse-fault handling")

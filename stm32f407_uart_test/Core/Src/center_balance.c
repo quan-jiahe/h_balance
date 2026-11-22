@@ -22,23 +22,28 @@ enum {
     M3_PREDICT_FROM_MM = 45, M3_RESPONSE_MS = 150
 };
 
-_Static_assert(sizeof(BalanceTuning) == 52, "SWD tuning layout changed");
+_Static_assert(sizeof(BalanceTuning) == 56, "SWD tuning layout changed");
+
+static const float still_delay_s = 0.30f;
+static const float far_still_boost_delay_s = 0.20f;
+static const float far_still_boost_multiplier = 5.5f;
 
 /* 在 VSCode 修改这些默认值，再编译并烧录即可永久生效。 */
 volatile BalanceTuning g_balance_tuning = {
     .magic = 0x42414C31u,
-    .version = 1u,
+    .version = 2u,
     .kp = 0.5f,          // 位置增益：增大时回中更积极
     .kv = 0.70f,          // 速度阻尼：增大时抑制运动和过冲
     .ki = 0.60f,          // 姿态学习速率；设0暂停学习，保留已有补偿
     .gain = 1.50f,        // 动态纠偏及学习速率倍率，不缩放已学补偿
-    .brake = 1.40f,       // 提前制动时的速度增益倍率
-    .max_speed = 30.0f,   // 目标球速上限，mm/s
+    .brake = 2.00f,       // 提前制动时的速度增益倍率
+    .max_speed = 20.0f,   // 目标球速上限，mm/s
     .accel = 10.0f,       // 制动距离规划加速度，mm/s²
     .ref_accel = 120.0f,  // 目标速度上升斜率，mm/s²
     .kff = 0.0f,          // 线性速度补偿
     .kff2 = 0.0f,         // 平方速度补偿
     .max_offset = 150.0f, // 相对锁存姿态的最大纠偏步数
+    .brake_speed_gain = 0.90f, // 接近速度为 30 mm/s 时使用一半额外制动增益
 };
 
 /* Integral is stored in output steps, so live gain changes preserve the learned pose. */
@@ -271,27 +276,35 @@ static void update_target(const LinkTest *link, int16_t target_mm)
             fabsf(ball.reference) + g_balance_tuning.ref_accel * dt);
     }
     const float toward = velocity * direction;
+    const double extra_brake = toward > 0.0f
+        ? (double)g_balance_tuning.brake_speed_gain * (toward / (30.0f + toward)) : 0.0;
     const float stopping_distance = toward * toward / (2.0f * acceleration);
-    ball.braking = toward > 0.0f && stopping_distance >= distance * (ball.braking ? 0.55f : 0.85f);
+    ball.braking = toward > 0.0f && stopping_distance * (1.0 + extra_brake) >= distance * (ball.braking ? 0.55f : 0.85f);
     ball.stalled_seconds = distance >= 10.0f && toward <= 4.0f && !ball.braking
-        ? fminf(0.3f, ball.stalled_seconds + dt) : 0.0f;
+        ? fminf(still_delay_s, ball.stalled_seconds + dt) : 0.0f;
     const bool still_off_target = distance >= 4.0f && speed <= 4.0f;
-    ball.still_seconds = still_off_target ? fminf(0.3f, ball.still_seconds + dt) : 0.0f;
+    ball.still_seconds = still_off_target ? fminf(still_delay_s, ball.still_seconds + dt) : 0.0f;
+    const bool far_still_boost = distance >= 10.0f && ball.still_seconds >= far_still_boost_delay_s;
     const float gain = g_balance_tuning.gain;
     const float integral_limit = g_balance_tuning.max_offset;
     ball.integral = clamp(ball.integral, -integral_limit, integral_limit);
     const float previous_integral = ball.integral;
     /* Keep the learned level while the judge is moving or holding the ball. */
     const bool allow_learning = !disturbance || (!mode3.edge && mode3.phase != M3_READY && mode3.phase != M3_HELD);
-    if (allow_learning && !ball.braking && ((distance < 10.0f && speed < 14.0f) || ball.stalled_seconds >= 0.3f)) {
+    if (allow_learning && !ball.braking
+            && (far_still_boost || (distance < 10.0f && speed < 14.0f) || ball.stalled_seconds >= still_delay_s)) {
         /* Bound the ramp rate independently of how far the ball is from zero. */
-        const double learning_rate = (double)gain * g_balance_tuning.ki * (ball.still_seconds >= 0.3f ? 3.0 : 1.0);
+        const float multiplier = far_still_boost ? far_still_boost_multiplier
+            : (ball.still_seconds >= still_delay_s ? 3.0f : 1.0f);
+        const double learning_rate = (double)gain * g_balance_tuning.ki * multiplier;
         const double next = ball.integral + learning_rate * clamp(error, -10.0f, 10.0f) * dt;
         ball.integral = (float)fmin(fmax(next, -integral_limit), integral_limit);
     }
     /* Large finite gains can overflow float before the output reaches its travel limits. */
     const double kv = (double)g_balance_tuning.kv * (ball.braking ? g_balance_tuning.brake : 1.0f);
-    const double base = gain * ((double)g_balance_tuning.kp * error + kv * ((double)ball.reference - velocity))
+    /* Oppose actual approach velocity even while the reference still asks for acceleration. */
+    const double damping = ball.braking ? (double)g_balance_tuning.kv * extra_brake * velocity : 0.0;
+    const double base = gain * ((double)g_balance_tuning.kp * error + kv * ((double)ball.reference - velocity) - damping)
         + (double)g_balance_tuning.kff * velocity + (double)g_balance_tuning.kff2 * velocity * speed;
     double demand = base + ball.integral;
     const double integral_change = (double)ball.integral - previous_integral;

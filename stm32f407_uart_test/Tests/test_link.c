@@ -438,7 +438,7 @@ static void test_center_balance(void)
         }
         check(link.steps == (end ? 650 : 0) && pulse_count == 10, 24);
     }
-    check(g_balance_tuning.magic == 0x42414C31u && g_balance_tuning.version == 1, 24);
+    check(g_balance_tuning.magic == 0x42414C31u && g_balance_tuning.version == 2, 24);
 }
 
 
@@ -659,14 +659,16 @@ static void test_center_stall_integral(void)
     for (unsigned side = 0; side < 2; ++side) {
         const int x = side ? -30 : 30;
         finish_center_startup(&link);
-        for (unsigned i = 0; i < 8; ++i) { observe_ball(&link, x, 0); }
+        for (unsigned i = 0; i < 5; ++i) { observe_ball(&link, x, 0); }
         check(center_balance_target_steps() == 310, 24);
         observe_ball(&link, x, side ? 10 : -10);
-        for (unsigned i = 0; i < 8; ++i) { observe_ball(&link, x, 0); }
+        for (unsigned i = 0; i < 5; ++i) { observe_ball(&link, x, 0); }
         check(center_balance_target_steps() == 310, 24);
-        for (unsigned i = 0; i < 30; ++i) { observe_ball(&link, x, 0); }
+        for (unsigned i = 0; i < 4; ++i) { observe_ball(&link, x, 0); }
+        check(center_balance_target_steps() == 310 + (side ? 5 : -5), 24);
+        for (unsigned i = 0; i < 29; ++i) { observe_ball(&link, x, 0); }
         const int ramped = center_balance_target_steps();
-        check(ramped == 310 + (side ? 29 : -29), 24);
+        check(ramped == 310 + (side ? 58 : -58), 24);
         for (unsigned i = 0; i < 30; ++i) { observe_ball(&link, x, side ? 10 : -10); }
         check(center_balance_target_steps() == ramped, 24);
         observe_ball(&link, 0, side ? 40 : -40);
@@ -678,7 +680,7 @@ static void test_center_stall_integral(void)
         check(held != 310 && link.steps == held && center_balance_state(&link, now_ms) == 3, 24);
         link.center_valid = false;
         center_balance_tick(&link, ++now_ms);
-        for (unsigned i = 0; i < 8; ++i) { observe_ball(&link, x, 0); }
+        for (unsigned i = 0; i < 5; ++i) { observe_ball(&link, x, 0); }
         check(center_balance_target_steps() == held, 24);
     }
     int at_thirty = 0;
@@ -706,7 +708,7 @@ static void test_center_stall_integral(void)
     check(center_balance_target_steps() == 300, 24); /* Rolling away uses the original rate. */
     finish_center_startup(&link);
     for (unsigned i = 0; i < 40; ++i) { observe_ball(&link, 6, 0); }
-    check(center_balance_target_steps() == 290, 24); /* Stationary outside the hold band. */
+    check(center_balance_target_steps() == 290, 24); /* Use the original ramp near the target. */
     for (unsigned limit = 0; limit < 3; ++limit) {
         g_balance_tuning.ki = 1;
         g_balance_tuning.kp = 2;
@@ -795,7 +797,10 @@ static void test_center_saturation_recovery(void)
         const int x = limit == 2 ? -30 : 30;
         for (unsigned i = 0; i < 120; ++i) { observe_ball(&link, x, 0); }
         const int saturated = center_balance_target_steps();
-        check(saturated == (limit == 1 ? 0 : (limit == 2 ? 650 : 290)), 25);
+        const int limit_steps = limit == 1 ? 0 : (limit == 2 ? 650 : 290);
+        /* Rejecting a full integrating frame can stop one step inside the limit. */
+        const int margin = x > 0 ? saturated - limit_steps : limit_steps - saturated;
+        check(margin >= 0 && margin <= 1, 25);
         for (unsigned i = 0; i < 80; ++i) { observe_ball(&link, x, 0); }
         check(center_balance_target_steps() == saturated, 25);
         for (unsigned i = 0; i < 12; ++i) {
@@ -849,6 +854,27 @@ static void test_center_braking(void)
         targets[i] = center_balance_target_steps();
     }
     check(targets[0] > 310 && targets[1] > targets[0], 25);
+    /* Compare the real motor command at equal distance, with and without speed gain. */
+    g_balance_tuning.max_speed = 0;
+    g_balance_tuning.accel = 10;
+    g_balance_tuning.brake = 1;
+    const int speeds[] = {5, 20, 30, -30, 0};
+    for (int side = -1; side <= 1; side += 2) {
+        int previous_extra = 0;
+        for (unsigned k = 0; k < sizeof(speeds)/sizeof(speeds[0]); ++k) {
+            for (unsigned enabled = 0; enabled < 2; ++enabled) {
+                finish_center_startup(&link);
+                vofa_tuning_init();
+                tuning_command(&link, enabled ? "brake_speed_gain=1\n" : "brake_speed_gain=0\n");
+                for (unsigned n = 0; n < 12; ++n) { observe_ball(&link, side * 28, -side * speeds[k]); }
+                targets[enabled] = center_balance_target_steps();
+            }
+            /* At 20 mm/s the old trigger is 23.5 mm, short of this sample at 28 mm. */
+            const int extra = side * (targets[1] - targets[0]);
+            check((k == 1 || k == 2) ? extra > previous_extra : extra == 0, 25);
+            previous_extra = extra;
+        }
+    }
     g_balance_tuning = defaults;
 }
 
@@ -1096,7 +1122,7 @@ static void test_vofa_tuning(void)
     tuning_command(&link, " KV = 0.9\nki=0.1\n");
     check(g_balance_tuning.kv == 0.9f && g_balance_tuning.ki == 0.1f && tuning_channel(6) == 1, 24);
     const char *bad[] = {"kp=nan\n", "kv=inf\n", "ki=1e39\n", "accel=0\n",
-        "max_offset=-1\n", "max_speed=-1\n", "ref_accel=-1\n",
+        "max_offset=-1\n", "max_speed=-1\n", "ref_accel=-1\n", "brake_speed_gain=-1\n",
         "gain=1x\n", "magic=0\n", "dir=-1\n", "start\n", "kp=0.9;kv=1\n", "kp=\n"};
     const BalanceTuning valid = g_balance_tuning;
     for (unsigned i = 0; i < sizeof(bad) / sizeof(bad[0]); ++i) {
@@ -1122,7 +1148,7 @@ static void test_vofa_tuning(void)
     check(tuning_channel(6) == 1, 24);
 
     const char *others[] = {"gain=1.2\n", "brake=1.8\n", "max_speed=30\n", "accel=50\n",
-        "ref_accel=60\n", "kff=-0.2\n", "kff2=-0.002\n", "max_offset=100\n"};
+        "ref_accel=60\n", "kff=-0.2\n", "kff2=-0.002\n", "max_offset=100\n", "brake_speed_gain=0.75\n"};
     for (unsigned i = 0; i < sizeof(others) / sizeof(others[0]); ++i) {
         tuning_command(&link, others[i]);
         check(tuning_channel(6) == 1, 24);
@@ -1136,7 +1162,7 @@ static void test_vofa_tuning(void)
     link.center_rx_ms = now_ms;
     vofa_tuning_tick(&link, now_ms);
     static const uint8_t tail[] = {0, 0, 0x80, 0x7F};
-    check(tuning_tx_size == 76 && memcmp(tuning_tx + 72, tail, 4) == 0, 24);
+    check(tuning_tx_size == 80 && memcmp(tuning_tx + 76, tail, 4) == 0, 24);
     check(tuning_channel(0) == 12 && tuning_channel(1) == -7 && tuning_channel(2) == link.steps, 24);
     check(tuning_channel(3) == center_balance_target_steps() && tuning_channel(4) == 1 && tuning_channel(5) == 1, 24);
     memcpy((void *)0x2001E480u, tuning_tx, tuning_tx_size);

@@ -6,7 +6,7 @@
 typedef struct {
     uint32_t magic, version;
     float kp, kv, ki, gain, brake, max_speed, accel, ref_accel;
-    float kff, kff2, max_offset;
+    float kff, kff2, max_offset, brake_speed_gain;
 } BalanceTuning;
 
 extern volatile BalanceTuning g_balance_tuning;

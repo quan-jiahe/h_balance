@@ -16,13 +16,13 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 CLI = Path(r"D:\STM32CubeCLT_1.21.0\STM32CubeProgrammer\bin\STM32_Programmer_CLI.exe")
 MAP = ROOT / "stm32f407_uart_test/MDK-ARM/Listings/CenterBalance/F407_K230_Center_Balance.map"
-FIELDS = ("kp", "kv", "ki", "gain", "brake", "max_speed", "accel", "ref_accel", "kff", "kff2", "max_offset")
-FORMAT = "<II11f"
+FIELDS = ("kp", "kv", "ki", "gain", "brake", "max_speed", "accel", "ref_accel", "kff", "kff2", "max_offset", "brake_speed_gain")
+FORMAT = "<II12f"
 FLOAT32_MAX = float.fromhex("0x1.fffffep127")
 
 
 def symbol_address(text):
-    match = re.search(r"^\s*g_balance_tuning\s+(0x[0-9a-fA-F]+)\s+Data\s+52\b", text, re.MULTILINE)
+    match = re.search(r"^\s*g_balance_tuning\s+(0x[0-9a-fA-F]+)\s+Data\s+56\b", text, re.MULTILINE)
     if not match:
         raise ValueError("Matching g_balance_tuning symbol not found; build the center target first")
     address = int(match[1], 16)
@@ -40,7 +40,7 @@ def validate(name, value):
     value = struct.unpack("<f", struct.pack("<f", value))[0]
     if name == "accel" and value <= 0:
         raise ValueError("accel must be positive")
-    if name in ("max_speed", "ref_accel", "max_offset") and value < 0:
+    if name in ("max_speed", "ref_accel", "max_offset", "brake_speed_gain") and value < 0:
         raise ValueError(name + " must be nonnegative")
     return value
 
@@ -49,7 +49,7 @@ def decode(data):
     if len(data) != struct.calcsize(FORMAT):
         raise ValueError("Incomplete RAM read")
     magic, version, *values = struct.unpack(FORMAT, data)
-    if magic != 0x42414C31 or version != 1:
+    if magic != 0x42414C31 or version != 2:
         raise ValueError("Board firmware does not match this tuning map; no write performed")
     return {name: validate(name, value) for name, value in zip(FIELDS, values)}
 

@@ -13,7 +13,7 @@ typedef struct { const char *name; size_t offset; } Parameter;
 #define PARAM(name) {#name, offsetof(BalanceTuning, name)}
 static const Parameter parameters[] = {
     PARAM(kp), PARAM(kv), PARAM(ki), PARAM(gain), PARAM(brake), PARAM(max_speed),
-    PARAM(accel), PARAM(ref_accel), PARAM(kff), PARAM(kff2), PARAM(max_offset)
+    PARAM(accel), PARAM(ref_accel), PARAM(kff), PARAM(kff2), PARAM(max_offset), PARAM(brake_speed_gain)
 };
 enum { PARAM_COUNT = sizeof(parameters) / sizeof(parameters[0]),
        CHANNELS = 7 + PARAM_COUNT, PERIOD_MS = 50, LINE_SIZE = 64 };
@@ -52,7 +52,8 @@ static bool apply_command(void)
         if ((value <= 0.0f && p->offset == offsetof(BalanceTuning, accel)) ||
             (value < 0.0f && (p->offset == offsetof(BalanceTuning, max_speed) ||
                               p->offset == offsetof(BalanceTuning, ref_accel) ||
-                              p->offset == offsetof(BalanceTuning, max_offset)))) { return false; }
+                              p->offset == offsetof(BalanceTuning, max_offset) ||
+                              p->offset == offsetof(BalanceTuning, brake_speed_gain)))) { return false; }
         *value_at(p) = value;
         return true;
     }
