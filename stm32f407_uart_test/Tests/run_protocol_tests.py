@@ -37,11 +37,14 @@ def main():
     args = argparse.ArgumentParser(description=__doc__)
     args.add_argument("--keil", required=True, type=Path, help="Path to UV4.exe")
     args.add_argument("--f103", action="store_true", help="Run the shared tests on Cortex-M3")
+    args.add_argument("--sine", action="store_true", help="Run the focused MODE5 tests")
     options = args.parse_args()
     root = Path(__file__).resolve().parents[1]
     repo = root.parent
     sys.path.insert(0, str(repo / "k230"))
     build = root / ("Tests/build/f103" if options.f103 else "Tests/build")
+    if options.sine:
+        build /= "sine"
     build.mkdir(parents=True, exist_ok=True)
     spec = importlib.util.spec_from_file_location("k230_protocol", repo / "k230/main.py")
     k230 = importlib.util.module_from_spec(spec)
@@ -84,8 +87,12 @@ def main():
     # Keep the growing test harness within the installed 32 KiB linker license.
     controls = tree.find(".//Cads/VariousControls/MiscControls")
     controls.text = (controls.text or "") + " -Oz"
+    defines = tree.find(".//Cads/VariousControls/Define")
     if options.f103:
-        tree.find(".//Cads/VariousControls/Define").text = "STM32F103xB"
+        defines.text = "STM32F103xB"
+    if options.sine:
+        defines.text = ",".join(filter(None, (defines.text, "TEST_SINE_ONLY")))
+        controls.text += " -Wno-unused-function"
     files = tree.find(".//Group[GroupName='Application']/Files")
     for element in list(files):
         if element.findtext("FileName") in ("board.c", "vofa_uart.c"):
@@ -124,6 +131,15 @@ def main():
         cpu.mem_write(0xE000ED88, struct.pack("<I", 0x00F00000))
     cpu.emu_start(entry, 0, count=600000000)
     failures, checks, done, first_failure = struct.unpack("<IIII", cpu.mem_read(0x2001E000, 16))
+    if options.sine:
+        assert done == 0xF4072300, "MODE5 C test did not finish"
+        for trial in range(5):
+            values = struct.unpack("<6f", cpu.mem_read(0x2001E700 + trial * 32, 24))
+            print("MODE5 trial=%d max_error_mm=%.2f rms_error_mm=%.2f peak_abs_x_mm=%.2f "
+                  "steps=%.0f..%.0f done=%.0f" % (trial, *values))
+        assert failures == 0, f"MODE5 test failures: {failures:#x}, first failed check: {first_failure}"
+        print(f"PASS: {checks} MODE5 state and mechanical model checks")
+        return
     model_results = []
     for index in range(18):
         values = struct.unpack('<8f', cpu.mem_read(0x2001E800 + index * 32, 32))

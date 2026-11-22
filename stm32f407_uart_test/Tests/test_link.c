@@ -309,7 +309,7 @@ static void test_center_startup(void)
     for (unsigned i = 0; i < 250; ++i) { center_balance_tick(&link, ++now_ms); }
     check(pulse_count == done && !center_balance_mode_confirmed(), 24);
     center_balance_button(&link, BOARD_SW2);
-    check(center_balance_selected_mode() == BALANCE_MODE_RESERVED, 24);
+    check(center_balance_selected_mode() == BALANCE_MODE_SINE, 24);
     center_balance_button(&link, BOARD_SW1);
     check(center_balance_selected_mode() == BALANCE_MODE_CENTER, 24);
     center_balance_button(&link, BOARD_SW1);
@@ -1106,6 +1106,189 @@ static void test_mode3_plant(void)
     }
 }
 
+#ifdef TEST_SINE_ONLY
+enum { SINE_STATE_CHECK = 0, SINE_PLANT_CHECK = 1 };
+
+static bool sine_status(const LinkTest *link, const char *status)
+{
+    return strcmp(center_balance_sine_status(link, now_ms), status) == 0;
+}
+
+static void arm_sine(LinkTest *link)
+{
+    park_center_startup(link);
+    center_balance_button(link, BOARD_SW2);
+    check(center_balance_selected_mode() == BALANCE_MODE_SINE, SINE_STATE_CHECK);
+    center_balance_button(link, BOARD_SW2);
+    check(center_balance_selected_mode() == BALANCE_MODE_RESERVED, SINE_STATE_CHECK);
+    center_balance_button(link, BOARD_SW1);
+    center_balance_button(link, BOARD_SW3);
+    check(center_balance_mode_confirmed() && sine_status(link, "WAIT BALL"), SINE_STATE_CHECK);
+}
+
+static void test_sine_state(void)
+{
+    LinkTest link;
+    arm_sine(&link);
+    const unsigned parked_pulses = pulse_count;
+    center_balance_start_sine(&link, now_ms, now_ms);
+    check(sine_status(&link, "WAIT BALL"), SINE_STATE_CHECK);
+    observe_ball(&link, 6, 0);
+    center_balance_start_sine(&link, now_ms, now_ms);
+    check(sine_status(&link, "SET BALL AT O"), SINE_STATE_CHECK);
+    observe_ball(&link, -5, 0);
+    center_balance_key(&link, LINK_KEY_OK, now_ms);
+    check(sine_status(&link, "PRESS SW4") && pulse_count == parked_pulses,
+          SINE_STATE_CHECK);
+    check(center_balance_sine_reference_mm(now_ms) == 0.0f, SINE_STATE_CHECK);
+
+    /* Include the debounce interval in elapsed time, with t=0 at the initial press. */
+    const uint32_t pressed = now_ms;
+    now_ms += 20;
+    center_balance_start_sine(&link, pressed, now_ms);
+    check(sine_status(&link, "RUN"), SINE_STATE_CHECK);
+    check(fabsf(center_balance_sine_reference_mm(now_ms) - 0.37698f) < 0.01f,
+          SINE_STATE_CHECK);
+    check(fabsf(center_balance_sine_reference_mm(pressed + 2500u) - 30.0f) < 0.05f,
+          SINE_STATE_CHECK);
+    check(fabsf(center_balance_sine_reference_mm(pressed + 5000u)) < 0.05f,
+          SINE_STATE_CHECK);
+    check(fabsf(center_balance_sine_reference_mm(pressed + 7500u) + 30.0f) < 0.05f,
+          SINE_STATE_CHECK);
+    center_balance_button(&link, BOARD_SW1);
+    center_balance_button(&link, BOARD_SW3);
+    center_balance_start_sine(&link, now_ms, now_ms);
+    check(center_balance_selected_mode() == BALANCE_MODE_SINE && sine_status(&link, "RUN")
+          && center_balance_sine_reference_mm(now_ms) > 0.3f, SINE_STATE_CHECK);
+
+    feed_center(&link, fixture_lost, link.center_sample_ms + 33u);
+    check(sine_status(&link, "VISION LOST"), SINE_STATE_CHECK);
+    observe_ball(&link, 5, 0);
+    check(!sine_status(&link, "RUN"), SINE_STATE_CHECK);
+    center_balance_start_sine(&link, now_ms, now_ms);
+    check(sine_status(&link, "RUN"), SINE_STATE_CHECK);
+    center_balance_key(&link, LINK_KEY_BACK, now_ms);
+    check(sine_status(&link, "STOP") && center_balance_target_steps() == link.steps,
+          SINE_STATE_CHECK);
+
+    arm_sine(&link);
+    observe_ball(&link, 0, 0);
+    center_balance_start_sine(&link, now_ms, now_ms);
+    observe_ball(&link, 101, 36);
+    check(sine_status(&link, "EDGE BRAKE") && center_balance_target_steps() < link.steps,
+          SINE_STATE_CHECK);
+    observe_ball(&link, 0, 0);
+    check(!sine_status(&link, "RUN"), SINE_STATE_CHECK);
+
+    arm_sine(&link);
+    now_ms = UINT32_MAX - 80u;
+    observe_ball(&link, 0, 0);
+    const uint32_t pressed_before_wrap = now_ms;
+    now_ms += 20u;
+    center_balance_start_sine(&link, pressed_before_wrap, now_ms);
+    check(sine_status(&link, "RUN"), SINE_STATE_CHECK);
+    now_ms = pressed_before_wrap + 100u;
+    center_balance_tick(&link, now_ms);
+    check(sine_status(&link, "RUN") &&
+          fabsf(center_balance_sine_reference_mm(now_ms) - 1.88372f) < 0.01f,
+          SINE_STATE_CHECK);
+    now_ms = link.center_rx_ms + 180u;
+    center_balance_tick(&link, now_ms);
+    check(sine_status(&link, "VISION LOST") && center_balance_target_steps() == link.steps,
+          SINE_STATE_CHECK);
+}
+
+typedef struct {
+    float x, v, pxx, pxv, pvv;
+    bool initialized;
+} PlantKalman;
+
+/* Match k230/main.py at the mechanical model's fixed 33 ms frame interval. */
+static float plant_kalman_velocity(PlantKalman *filter, float x)
+{
+    const float dt = 0.033f, position_noise = 0.36f, accel_variance = 3000.0f * dt;
+    if (!filter->initialized) {
+        *filter = (PlantKalman){ .x = x, .pxx = position_noise, .pvv = 900.0f, .initialized = true };
+        return 0.0f;
+    }
+    const float predicted_x = filter->x + dt * filter->v;
+    const float pxx = filter->pxx + 2.0f * dt * filter->pxv
+        + dt * dt * (filter->pvv + accel_variance / 3.0f);
+    const float pxv = filter->pxv + dt * (filter->pvv + accel_variance / 2.0f);
+    const float pvv = filter->pvv + accel_variance;
+    const float innovation = x - predicted_x;
+    const float innovation_variance = pxx + position_noise;
+    const float velocity_gain = pxv / innovation_variance;
+    filter->x = predicted_x + pxx / innovation_variance * innovation;
+    filter->v += velocity_gain * innovation;
+    filter->pxx = position_noise / innovation_variance * pxx;
+    filter->pxv = position_noise / innovation_variance * pxv;
+    filter->pvv = pvv - velocity_gain * pxv;
+    return filter->v;
+}
+
+static void observe_sine_plant(LinkTest *link, BallPlant *plant, PlantKalman *filter)
+{
+    plant->x_history[plant->history] = plant->x;
+    plant->history = (plant->history + 1u) % 3u;
+    const float delayed_x = plant->x_history[plant->history];
+    link->center_error_mm = (int16_t)lroundf(delayed_x);
+    link->center_velocity_mm_s = (int16_t)lroundf(plant_kalman_velocity(filter, delayed_x));
+    link->center_valid = true;
+    link->center_sample_ms = link->center_rx_ms = now_ms;
+    ++link->center_observations;
+}
+
+static void test_sine_plant(void)
+{
+    const float neutrals[] = {310.0f, 325.0f, 295.0f, 270.0f, 350.0f};
+    const float responses[] = {0.6f, 0.4f, 0.8f, 0.8f, 0.4f};
+    const float initial_positions[] = {0.0f, -5.0f, 5.0f, -5.0f, -5.0f};
+    for (unsigned trial = 0; trial < sizeof(neutrals) / sizeof(neutrals[0]); ++trial) {
+        LinkTest link;
+        arm_sine(&link);
+        BallPlant plant = { .x = initial_positions[trial], .neutral = neutrals[trial],
+                           .response = responses[trial] };
+        for (unsigned i = 0; i < 3; ++i) { plant.x_history[i] = plant.x; }
+        PlantKalman filter = {0};
+        observe_sine_plant(&link, &plant, &filter);
+        center_balance_tick(&link, now_ms);
+        const uint32_t pressed = now_ms;
+        float peak_error = fabsf(plant.x), square_error = plant.x * plant.x;
+        float peak_position = fabsf(plant.x);
+        int32_t min_steps = link.steps, max_steps = link.steps;
+        bool ran_until_end = false;
+        for (unsigned ms = 1; ms <= 10000; ++ms) {
+            ++now_ms;
+            if (ms == 20) { center_balance_start_sine(&link, pressed, now_ms); }
+            if (ms % 33 == 0) { observe_sine_plant(&link, &plant, &filter); }
+            center_balance_tick(&link, now_ms);
+            plant_integrate(&link, &plant);
+            const float reference = 30.0f * sinf(6.28318530718f * ms / 10000.0f);
+            const float error = plant.x - reference;
+            peak_error = fmaxf(peak_error, fabsf(error));
+            square_error += error * error;
+            peak_position = fmaxf(peak_position, fabsf(plant.x));
+            if (link.steps < min_steps) { min_steps = link.steps; }
+            if (link.steps > max_steps) { max_steps = link.steps; }
+            if (ms == 9999) { ran_until_end = sine_status(&link, "RUN"); }
+        }
+        const float rms_error = sqrtf(square_error / 10001.0f);
+        volatile float *report = (volatile float *)(0x2001E700u + trial * 32u);
+        report[0] = peak_error;
+        report[1] = rms_error;
+        report[2] = peak_position;
+        report[3] = min_steps;
+        report[4] = max_steps;
+        report[5] = sine_status(&link, "DONE") ? 1.0f : 0.0f;
+        check(ran_until_end && report[5] == 1.0f, SINE_PLANT_CHECK);
+        check(center_balance_sine_reference_mm(now_ms) == 0.0f, SINE_PLANT_CHECK);
+        check(peak_error <= 12.0f && rms_error <= 8.0f, SINE_PLANT_CHECK);
+        check(peak_position <= 100.0f && min_steps >= 0 && max_steps <= 650, SINE_PLANT_CHECK);
+    }
+}
+#endif
+
 static void test_vofa_tuning(void)
 {
     LinkTest link;
@@ -1199,12 +1382,16 @@ static void test_vofa_tuning(void)
 
 int main(void)
 {
+    result[0] = result[1] = result[2] = result[3] = 0;
+#ifdef TEST_SINE_ONLY
+    test_sine_state();
+    test_sine_plant();
+#else
     LinkTest link;
     uint8_t corrupt[sizeof(fixture_jog_forward)];
     const uint8_t noise[] = {0, 0xA5, 0xA5, 0x5A, 2, 255};
     const uint8_t bad_length[] = {0xA5, 0x5A, 1, 255};
     uint8_t unknown[7];
-    result[0] = result[1] = result[2] = result[3] = 0;
     check(link_crc16((const uint8_t *)"123456789", 9) == 0x29B1u, 0);
     link_test_init(&link);
     feed(&link, noise, sizeof(noise));
@@ -1291,6 +1478,7 @@ int main(void)
     test_three_point_plant();
     test_mode3_plant();
     test_vofa_tuning();
+#endif
     result[2] = 0xF4072300u;
     __asm volatile ("bkpt #0");
     for (;;) { }

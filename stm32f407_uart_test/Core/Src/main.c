@@ -54,6 +54,11 @@ int main(void)
                 link.menu_due = 1;
             }
         }
+        uint32_t pressed_ms;
+        if (board_button_take_press_at(BOARD_SW4, &pressed_ms)) {
+            center_balance_start_sine(&link, pressed_ms, now_ms);
+            link.menu_due = 1;
+        }
         center_balance_tick(&link, now_ms);
         vofa_tuning_tick(&link, now_ms);
 #else

@@ -19,7 +19,7 @@ F103 使用内部 HSI 加 PLL 得到 64 MHz，Flash 和 SRAM 分别按 C8T6 的 
 | ICM-45686 | P3.1～4，`PB12` CS、`PB13` SCK、`PB14` MISO、`PB15` MOSI | 原 IMU，3.3V 和 GND 接扩展板对应电源 |
 | SWD 下载 | 最小系统板 SWDIO `PA13`、SWCLK `PA14`、GND | WCH-Link CMSIS-DAP 或 ST-LINK |
 
-KEY1 `PA11` 选下一模式，KEY2 `PA15` 选上一模式，KEY3 `PB3` 确认。KEY4 `PB4` 和 KEY5 `PB5` 也按原按键接口检测。固件使用内部上拉、低电平有效和原 20 ms 消抖。JTAG 释放给按键用，SWD 保留。
+KEY1 `PA11` 选下一模式，KEY2 `PA15` 选上一模式，KEY3 `PB3` 确认。KEY4 `PB4` 启动 MODE5 正弦跟踪，KEY5 `PB5` 保留按键检测。固件使用内部上拉、低电平有效和原 20 ms 消抖。JTAG 释放给按键用，SWD 保留。[MODE5 操作与测试](../stm32f407_uart_test/README.md#mode5-正弦位置跟踪)
 
 - USART2 共用 `U9` ESP8266 插座。接 K230 时取下 ESP8266。
 - `PA8` 共用 SPI TFT 插座的 DC，`PA1` 共用 `H1` DHT11 信号。将这两个插座留空。

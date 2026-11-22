@@ -204,10 +204,12 @@ static void make_frame(const LinkTest *link, uint32_t now)
     char line[22];
     const BalanceMode mode = center_balance_selected_mode();
     const uint8_t state = center_balance_state(link, now);
+    const bool confirmed = center_balance_mode_confirmed();
     const char *status = state == 5 ? "FAULT" : state == 0 ? "STARTUP"
-        : !center_balance_mode_confirmed() ? "CONFIRM"
+        : !confirmed ? "CONFIRM"
         : mode == BALANCE_MODE_THREE_POINTS ? center_balance_three_point_status(link, now)
         : mode == BALANCE_MODE_DISTURBANCE ? center_balance_mode3_status(link, now)
+        : mode == BALANCE_MODE_SINE ? center_balance_sine_status(link, now)
         : mode != BALANCE_MODE_CENTER ? "RESERVED"
         : state == 4 ? "STOP" : state == 3 ? "HOLD" : state == 2 ? "RUN" : "WAIT BALL";
     snprintf(line, sizeof(line), "MODE%u %s", (unsigned)mode, status);
@@ -219,6 +221,13 @@ static void make_frame(const LinkTest *link, uint32_t now)
         for (unsigned row = 0; row < 2; ++row) {
             memcpy(frame[1 + row] + (WIDTH - MODE_LABEL_WIDTH) / 2, mode_labels[label][row], MODE_LABEL_WIDTH);
         }
+    } else if (mode == BALANCE_MODE_SINE && confirmed && state != 0 && state != 5) {
+        snprintf(line, sizeof(line), "REF %+d MM", (int)lroundf(center_balance_sine_reference_mm(now)));
+        draw_line(frame[1], line);
+        const unsigned peak = (unsigned)lroundf(10.0f * center_balance_sine_peak_error_mm());
+        const unsigned rms = (unsigned)lroundf(10.0f * center_balance_sine_rms_error_mm());
+        snprintf(line, sizeof(line), "PK %u.%u RMS %u.%u MM", peak / 10u, peak % 10u, rms / 10u, rms % 10u);
+        draw_line(frame[2], line);
     }
     if (!imu_ready || now - last_good > 200u) {
         draw_line(frame[ANGLE_PAGE], "ANGLE IMU ERR");

@@ -22,6 +22,19 @@ enum {
     M3_PREDICT_FROM_MM = 45, M3_RESPONSE_MS = 150
 };
 
+enum {
+    SINE_PERIOD_MS = 10000, SINE_AMPLITUDE_MM = 30, SINE_START_TOL_MM = 5,
+    SINE_EDGE_MM = 75, SINE_PREDICT_FROM_MM = 50, SINE_TRAVEL_MM = 100,
+    SINE_MAX_OFFSET = 180, SINE_MAX_COMMAND_CHANGE = 32, SINE_PULSE_INTERVAL_MS = 1
+};
+
+static const float sine_radians_per_ms = 0.000628318531f;
+static const float sine_kp = 10.0f;          /* steps/mm */
+static const float sine_kv = 4.5f;           /* steps/(mm/s) */
+static const float sine_ki = 2.0f;           /* steps/(mm*s) */
+static const float sine_accel_ff = 1.67f;    /* steps/(mm/s²) */
+static const float sine_velocity_ff = 1.0f;  /* steps/(mm/s), approximates rolling drag */
+
 _Static_assert(sizeof(BalanceTuning) == 56, "SWD tuning layout changed");
 
 static const float still_delay_s = 0.30f;
@@ -74,6 +87,13 @@ static struct {
     uint32_t pin_since, last_pinned_ms;
     bool entered, edge, edge_output;
 } mode3;
+typedef enum { SINE_WAIT_START, SINE_RUNNING, SINE_DONE, SINE_LOST, SINE_EDGE, SINE_STOP } SinePhase;
+static struct {
+    SinePhase phase;
+    uint32_t started_ms, samples;
+    float peak_error_mm, squared_error_sum;
+    bool edge_output;
+} sine;
 typedef enum { NO_FAULT, BOOT_TIMEOUT, STEP_PULSE } FaultReason;
 static FaultReason fault_reason;
 
@@ -85,6 +105,39 @@ static float clamp(float value, float min, float max)
 static bool vision_ready(const LinkTest *link, uint32_t now)
 {
     return link->center_valid && now - link->center_rx_ms < VISION_TIMEOUT_MS;
+}
+
+static bool sine_start_position_ready(const LinkTest *link, uint32_t now)
+{
+    return vision_ready(link, now) && abs(link->center_error_mm) <= SINE_START_TOL_MM;
+}
+
+float center_balance_sine_reference_mm(uint32_t now)
+{
+    const uint32_t elapsed = now - sine.started_ms;
+    return sine.phase == SINE_RUNNING && elapsed < SINE_PERIOD_MS
+        ? SINE_AMPLITUDE_MM * sinf(sine_radians_per_ms * elapsed) : 0.0f;
+}
+
+float center_balance_sine_peak_error_mm(void) { return sine.peak_error_mm; }
+
+float center_balance_sine_rms_error_mm(void)
+{
+    return sine.samples ? sqrtf(sine.squared_error_sum / sine.samples) : 0.0f;
+}
+
+const char *center_balance_sine_status(const LinkTest *link, uint32_t now)
+{
+    switch (sine.phase) {
+    case SINE_RUNNING: return "RUN";
+    case SINE_DONE: return "DONE";
+    case SINE_LOST: return "VISION LOST";
+    case SINE_EDGE: return "EDGE BRAKE";
+    case SINE_STOP: return "STOP";
+    default: break;
+    }
+    if (!vision_ready(link, now)) { return "WAIT BALL"; }
+    return sine_start_position_ready(link, now) ? "PRESS SW4" : "SET BALL AT O";
 }
 
 static bool three_points_running(void)
@@ -321,6 +374,123 @@ static void update_target(const LinkTest *link, int16_t target_mm)
     target_steps = bounded_target(anchor_steps + MOTOR_MM_SIGN * (int32_t)lroundf(ball.demand));
 }
 
+static void sine_limits(float *low, float *high)
+{
+    const float end0 = MOTOR_MM_SIGN * -anchor_steps;
+    const float end1 = MOTOR_MM_SIGN * (AXIS_MAX_STEPS - anchor_steps);
+    *low = fmaxf(-SINE_MAX_OFFSET, fminf(end0, end1));
+    *high = fminf(SINE_MAX_OFFSET, fmaxf(end0, end1));
+}
+
+static void update_sine_target(const LinkTest *link, uint32_t now)
+{
+    const float phase = sine_radians_per_ms * (now - sine.started_ms);
+    const float omega = sine_radians_per_ms * 1000.0f;
+    const float reference = SINE_AMPLITUDE_MM * sinf(phase);
+    const float velocity_reference = SINE_AMPLITUDE_MM * omega * cosf(phase);
+    const float acceleration_reference = -omega * omega * reference;
+    const float error = reference - link->center_error_mm;
+    const float dt = ball.initialized
+        ? clamp((link->center_sample_ms - ball.sample_ms) * 0.001f, 0.010f, 0.180f) : 0.033f;
+    ball.initialized = true;
+    ball.sample_ms = link->center_sample_ms;
+    const float base = sine_kp * error + sine_kv * (velocity_reference - link->center_velocity_mm_s)
+        + sine_accel_ff * acceleration_reference + sine_velocity_ff * velocity_reference;
+    float low, high;
+    sine_limits(&low, &high);
+    const float previous = clamp(ball.integral, low, high);
+    const float integral = clamp(previous + sine_ki * error * dt, low, high);
+    const float applied = MOTOR_MM_SIGN * (link->steps - anchor_steps);
+    const float demand = base + integral;
+    /* Let the integral unwind if the output is already saturated or the motor has not caught up. */
+    const bool limited_in_error_direction = (demand > high && error > 0.0f)
+        || (demand < low && error < 0.0f)
+        || (fabsf(ball.demand - applied) > INTEGRAL_TRACKING_LIMIT && (demand - applied) * error > 0.0f);
+    ball.integral = limited_in_error_direction ? previous : integral;
+    const float bounded = clamp(base + ball.integral, low, high);
+    ball.demand += clamp(bounded - ball.demand, -SINE_MAX_COMMAND_CHANGE, SINE_MAX_COMMAND_CHANGE);
+    target_steps = bounded_target(anchor_steps + MOTOR_MM_SIGN * (int32_t)lroundf(ball.demand));
+}
+
+void center_balance_start_sine(const LinkTest *link, uint32_t pressed_ms, uint32_t now)
+{
+    if (confirmed_mode != BALANCE_MODE_SINE || selected_mode != BALANCE_MODE_SINE
+            || startup_motion || level_steps < 0 || fault_reason != NO_FAULT || link->step_fault
+            || sine.phase == SINE_RUNNING || !sine_start_position_ready(link, now)) { return; }
+
+    hold_here(link);
+    sine.phase = SINE_RUNNING;
+    sine.started_ms = pressed_ms;
+    sine.samples = 0;
+    sine.peak_error_mm = sine.squared_error_sum = 0.0f;
+    sine.edge_output = false;
+    armed = active = true;
+    seen_observations = link->center_observations;
+    update_sine_target(link, now);
+}
+
+static void sine_tick(LinkTest *link, uint32_t now)
+{
+    if (!armed) { return; }
+    const bool gap = ball.initialized && link->center_sample_ms - ball.sample_ms >= VISION_TIMEOUT_MS;
+    if (!vision_ready(link, now) || gap) {
+        if (sine.phase == SINE_RUNNING || sine.phase == SINE_EDGE) {
+            sine.phase = SINE_LOST;
+            armed = false;
+            link->menu_due = 1;
+        }
+        if (active) { hold_here(link); }
+        return;
+    }
+
+    const bool finished = sine.phase == SINE_RUNNING && now - sine.started_ms >= SINE_PERIOD_MS;
+    if (finished) {
+        sine.phase = SINE_DONE;
+        link->menu_due = 1;
+    }
+    if (!finished && seen_observations == link->center_observations) { return; }
+    seen_observations = link->center_observations;
+    active = true;
+
+    const float position = link->center_error_mm;
+    const float distance = fabsf(position);
+    const float outward = position < 0.0f ? -link->center_velocity_mm_s : link->center_velocity_mm_s;
+    if (sine.phase == SINE_RUNNING) {
+        /* Score received samples against the board clock. Camera latency is included in this estimate. */
+        const float sample_error = center_balance_sine_reference_mm(link->center_rx_ms) - position;
+        sine.peak_error_mm = fmaxf(sine.peak_error_mm, fabsf(sample_error));
+        sine.squared_error_sum += sample_error * sample_error;
+        ++sine.samples;
+
+        const float projected = distance + outward * 0.15f + outward * outward / (2.0f * 25.0f);
+        if (distance < SINE_EDGE_MM && (distance < SINE_PREDICT_FROM_MM || outward <= 0.0f
+                                      || projected < SINE_TRAVEL_MM)) {
+            update_sine_target(link, now);
+            return;
+        }
+        sine.phase = SINE_EDGE;
+        link->menu_due = 1;
+    }
+
+    if ((sine.phase == SINE_EDGE || sine.phase == SINE_DONE) && distance >= SINE_PREDICT_FROM_MM
+            && outward >= -M3_STILL_MM_S) {
+        float low, high;
+        sine_limits(&low, &high);
+        ball.demand = position > 0.0f ? low : high;
+        ball.sample_ms = link->center_sample_ms;
+        ball.settled = false;
+        sine.edge_output = true;
+        target_steps = bounded_target(anchor_steps + MOTOR_MM_SIGN * (int32_t)lroundf(ball.demand));
+    } else {
+        if (sine.edge_output) {
+            hold_here(link);
+            sine.edge_output = false;
+            active = true;
+        }
+        update_target(link, 0);
+    }
+}
+
 int32_t center_balance_level_steps(void) { return level_steps; }
 int32_t center_balance_target_steps(void) { return target_steps; }
 
@@ -364,6 +534,9 @@ void center_balance_init(void)
     confirmed_mode = BALANCE_MODE_NONE;
     sequence.phase = THREE_WAIT_BALL;
     sequence.leg = 0;
+    sine.phase = SINE_WAIT_START;
+    sine.samples = 0;
+    sine.peak_error_mm = sine.squared_error_sum = 0.0f;
     armed = false;
     startup_motion = true;
     target_steps = AXIS_MAX_STEPS;
@@ -376,8 +549,10 @@ void center_balance_key(const LinkTest *link, uint8_t key, uint32_t now)
 {
     (void)now;
     if (key == LINK_KEY_BACK || (key == LINK_KEY_OK && armed && !startup_motion
-                                && confirmed_mode != BALANCE_MODE_THREE_POINTS)) {
+                                && confirmed_mode != BALANCE_MODE_THREE_POINTS
+                                && confirmed_mode != BALANCE_MODE_SINE)) {
         if (confirmed_mode == BALANCE_MODE_THREE_POINTS && armed) { sequence.phase = THREE_STOP; }
+        if (confirmed_mode == BALANCE_MODE_SINE) { sine.phase = SINE_STOP; }
         armed = startup_motion = false;
         hold_here(link);
     } else if (startup_motion || fault_reason != NO_FAULT || link->step_fault) {
@@ -406,11 +581,11 @@ void center_balance_key(const LinkTest *link, uint8_t key, uint32_t now)
 
 void center_balance_button(const LinkTest *link, BoardButton button)
 {
-    if (button != BOARD_SW3 && three_points_running()) { return; }
+    if (sine.phase == SINE_RUNNING || (button != BOARD_SW3 && three_points_running())) { return; }
     if (button == BOARD_SW1) {
-        selected_mode = selected_mode == BALANCE_MODE_RESERVED ? BALANCE_MODE_CENTER : selected_mode + 1;
+        selected_mode = selected_mode == BALANCE_MODE_SINE ? BALANCE_MODE_CENTER : selected_mode + 1;
     } else if (button == BOARD_SW2) {
-        selected_mode = selected_mode == BALANCE_MODE_CENTER ? BALANCE_MODE_RESERVED : selected_mode - 1;
+        selected_mode = selected_mode == BALANCE_MODE_CENTER ? BALANCE_MODE_SINE : selected_mode - 1;
     } else if (button == BOARD_SW3 && !startup_motion && level_steps >= 0
                && fault_reason == NO_FAULT && !link->step_fault) {
         hold_here(link);
@@ -419,7 +594,11 @@ void center_balance_button(const LinkTest *link, BoardButton button)
         sequence.phase = THREE_WAIT_BALL;
         sequence.leg = 0;
         sequence.hold_started_ms = 0;
-        armed = confirmed_mode != BALANCE_MODE_RESERVED;
+        sine.phase = SINE_WAIT_START;
+        sine.samples = 0;
+        sine.peak_error_mm = sine.squared_error_sum = 0.0f;
+        sine.edge_output = false;
+        armed = confirmed_mode != BALANCE_MODE_RESERVED && confirmed_mode != BALANCE_MODE_SINE;
         mode3.phase = M3_CENTER;
         mode3.pin_position = 0;
         mode3.pin_since = mode3.last_pinned_ms = 0;
@@ -436,7 +615,9 @@ void center_balance_tick(LinkTest *link, uint32_t now)
         fail(link, BOOT_TIMEOUT);
         return;
     }
-    if (!startup_motion && level_steps >= 0) {
+    if (!startup_motion && level_steps >= 0 && confirmed_mode == BALANCE_MODE_SINE) {
+        sine_tick(link, now);
+    } else if (!startup_motion && level_steps >= 0) {
         if (!armed) { return; }
         bool running = three_points_running();
         const bool ready = vision_ready(link, now);
@@ -467,7 +648,8 @@ void center_balance_tick(LinkTest *link, uint32_t now)
         }
     }
     const uint32_t pulse_interval = startup_motion || level_steps < 0
-        ? STARTUP_PULSE_INTERVAL_MS : CONTROL_PULSE_INTERVAL_MS;
+        ? STARTUP_PULSE_INTERVAL_MS : (confirmed_mode == BALANCE_MODE_SINE
+            && (sine.phase == SINE_RUNNING || sine.edge_output) ? SINE_PULSE_INTERVAL_MS : CONTROL_PULSE_INTERVAL_MS);
     if (link->steps != target_steps && now - last_pulse_ms >= pulse_interval) {
         const bool forward = link->steps < target_steps;
         if (forward ? link->steps < AXIS_MAX_STEPS : link->steps > 0) {
@@ -500,7 +682,9 @@ void center_balance_menu(LinkTest *link, uint32_t now)
         : state == 4 ? "BAL: S4 STOPPED"
         : state == 2 || state == 3 ? (state == 3 ? "BAL: S3 HOLD ZERO" : "BAL: S2 ZERO")
         : "BAL: S1 WAIT BALL";
-    if (confirmed_mode == BALANCE_MODE_DISTURBANCE && state != 0 && state != 5) {
+    if (confirmed_mode == BALANCE_MODE_SINE && state != 0 && state != 5) {
+        snprintf(link->startup_rows[0], 22, "BAL: M5 %s", center_balance_sine_status(link, now));
+    } else if (confirmed_mode == BALANCE_MODE_DISTURBANCE && state != 0 && state != 5) {
         snprintf(link->startup_rows[0], 22, "BAL: M3 %s", center_balance_mode3_status(link, now));
     } else if (confirmed_mode == BALANCE_MODE_THREE_POINTS && state != 0 && state != 5) {
         snprintf(link->startup_rows[0], 22, "BAL: %s", center_balance_three_point_status(link, now));
@@ -511,6 +695,12 @@ void center_balance_menu(LinkTest *link, uint32_t now)
         snprintf(link->startup_rows[1], 22, "STEP PULSE FAIL");
     } else if (fault_reason == BOOT_TIMEOUT) {
         snprintf(link->startup_rows[1], 22, "STARTUP TIMEOUT");
+    } else if (confirmed_mode == BALANCE_MODE_SINE && sine.phase == SINE_DONE) {
+        snprintf(link->startup_rows[1], 22, "MAX:%ld RMS:%ld MM",
+                 lroundf(center_balance_sine_peak_error_mm()), lroundf(center_balance_sine_rms_error_mm()));
+    } else if (confirmed_mode == BALANCE_MODE_SINE && vision_ready(link, now)) {
+        snprintf(link->startup_rows[1], 22, "R:%+ld X:%+d MM",
+                 lroundf(center_balance_sine_reference_mm(now)), link->center_error_mm);
     } else if (vision_ready(link, now) && !startup_motion) {
         snprintf(link->startup_rows[1], 22, "X:%+d V:%+d mm/s", link->center_error_mm, link->center_velocity_mm_s);
     } else {
