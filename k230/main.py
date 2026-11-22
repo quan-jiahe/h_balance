@@ -11,8 +11,9 @@ WIDTH = 640
 HEIGHT = 480
 BAUDRATE = 115200
 FRAME_PERIOD_MS = 20
-VELOCITY_SAMPLES = 5
-VELOCITY_WINDOW_MS = 120
+POSITION_NOISE_VARIANCE = 0.36  # mm^2
+ACCEL_NOISE_DENSITY = 3000.0  # mm^2/s^3
+INITIAL_VELOCITY_VARIANCE = 900.0  # (mm/s)^2
 
 # Fill these only after measuring the real camera/platform geometry.
 X_ZERO_PX = None
@@ -63,10 +64,42 @@ class BallTracker:
         self.reset()
 
     def reset(self):
-        self.last_x = None
+        self.position = None
         self.velocity = 0.0
-        self.sample_ms = 0
-        self.samples = []
+        self.position_variance = POSITION_NOISE_VARIANCE
+        self.position_velocity_covariance = 0.0
+        self.velocity_variance = INITIAL_VELOCITY_VARIANCE
+
+    def _update_velocity(self, x_mm, elapsed_ms):
+        if self.position is None:
+            self.position = x_mm
+            return 0.0
+        if not 0 < elapsed_ms <= 500:
+            raise ValueError("invalid/stale sampling interval")
+
+        # Predict position and symmetric covariance with continuous white acceleration noise.
+        dt = elapsed_ms * 0.001
+        dt_squared = dt * dt
+        accel_variance = ACCEL_NOISE_DENSITY * dt
+        predicted_position = self.position + dt * self.velocity
+        position_variance = (self.position_variance + 2 * dt * self.position_velocity_covariance
+                             + dt_squared * (self.velocity_variance + accel_variance / 3))
+        covariance = (self.position_velocity_covariance
+                      + dt * (self.velocity_variance + accel_variance / 2))
+        velocity_variance = self.velocity_variance + accel_variance
+
+        # Correct using the measured position. Only the estimated speed is sent to the controller.
+        innovation = x_mm - predicted_position
+        innovation_variance = position_variance + POSITION_NOISE_VARIANCE
+        position_gain = position_variance / innovation_variance
+        velocity_gain = covariance / innovation_variance
+        self.position = predicted_position + position_gain * innovation
+        self.velocity += velocity_gain * innovation
+        position_residual = POSITION_NOISE_VARIANCE / innovation_variance
+        self.position_variance = position_residual * position_variance
+        self.position_velocity_covariance = position_residual * covariance
+        self.velocity_variance = velocity_variance - velocity_gain * covariance
+        return self.velocity
 
     def update(self, detection, elapsed_ms, zero_px=None, mm_per_pixel=None):
         # Detection contract: (center_x_px, center_y_px, confidence_0_to_100).
@@ -87,32 +120,12 @@ class BallTracker:
             if not pipe_mode and not (0 <= zero_px < WIDTH and mm_per_pixel != 0):
                 raise ValueError("invalid affine calibration")
             x_mm = pipe_calibration.pixel_to_mm(x_px) if pipe_mode else (x_px - zero_px) * mm_per_pixel
-            velocity = 0.0
-            if self.last_x is not None:
-                if not 0 < elapsed_ms <= 500:
-                    raise ValueError("invalid/stale sampling interval")
-                self.sample_ms += elapsed_ms
-            samples = (self.samples + [(self.sample_ms, x_mm)])[-VELOCITY_SAMPLES:]
-            while len(samples) > 2 and self.sample_ms - samples[0][0] > VELOCITY_WINDOW_MS:
-                samples = samples[1:]
-            if len(samples) > 1:
-                # Fit recent raw positions; relative time avoids long-uptime precision loss.
-                times = [t - self.sample_ms for t, _ in samples]
-                mean_t = sum(times) / len(times)
-                mean_x = sum(x for _, x in samples) / len(samples)
-                denominator = sum((t - mean_t) ** 2 for t in times)
-                if denominator <= 0:
-                    raise ValueError("invalid velocity window")
-                velocity = 1000.0 * sum((t - mean_t) * (x - mean_x)
-                                      for t, (_, x) in zip(times, samples)) / denominator
+            velocity = self._update_velocity(x_mm, elapsed_ms)
             if not (-32768 <= x_mm <= 32767 and -32768 <= velocity <= 32767):
                 raise ValueError("measurement exceeds wire format")
         except (TypeError, ValueError, OverflowError):
             self.reset()
             return LOST_MEASUREMENT
-        self.last_x = x_mm
-        self.samples = samples
-        self.velocity = velocity
         return x_mm, velocity, confidence, RAW_VALID
 
 

@@ -15,16 +15,15 @@ class VelocityLatencyTests(unittest.TestCase):
     def test_variable_frame_interval_and_raw_position(self):
         tracker = app.BallTracker()
         elapsed = 0
-        for dt in (33, 20, 45, 30, 90, 150, 25, 33):
+        for frame, dt in enumerate((33, 20, 45, 30, 90, 150, 25, 33)):
             elapsed += dt
             x, v, _, status = measured(tracker, elapsed * 0.04, dt)
             self.assertAlmostEqual(x, elapsed * 0.04)
-            if len(tracker.samples) > 1:
-                self.assertAlmostEqual(v, 40)
+            if frame == 0:
+                self.assertEqual(v, 0)
+            elif frame >= 3:
+                self.assertAlmostEqual(v, 40, delta=2)
             self.assertEqual(status, app.RAW_VALID)
-            self.assertLessEqual(len(tracker.samples), app.VELOCITY_SAMPLES)
-            if len(tracker.samples) > 2:
-                self.assertLessEqual(tracker.samples[-1][0] - tracker.samples[0][0], 120)
 
     def test_reversal_reacts_before_old_double_filter(self):
         tracker = app.BallTracker()
@@ -53,18 +52,31 @@ class VelocityLatencyTests(unittest.TestCase):
     def test_stationary_noise_does_not_look_like_fast_motion(self):
         tracker = app.BallTracker()
         rng = random.Random(407)
-        velocities = [measured(tracker, rng.uniform(-0.3, 0.3), 33)[1] for _ in range(1000)]
-        self.assertLess(statistics.pstdev(velocities[10:]), 3)
-        self.assertLess(max(abs(v) for v in velocities[10:]), 8)
+        velocities = [measured(tracker, rng.uniform(-0.3, 0.3), 33)[1] for _ in range(1000)][10:]
+        self.assertLess(statistics.pstdev(velocities), 2.1)
+        self.assertLess(max(abs(v) for v in velocities), 6)
+        self.assertLessEqual(sum(abs(round(v)) > 4 for v in velocities), 10)
 
-    def test_long_uptime_and_lost_samples_reset_velocity(self):
+    def test_motion_onset_after_stationary_ball(self):
+        for direction in (-1, 1):
+            with self.subTest(direction=direction):
+                tracker = app.BallTracker()
+                for _ in range(80):
+                    measured(tracker, 0, 33)
+                speeds = [direction * measured(tracker, direction * 80 * i * 0.033, 33)[1]
+                          for i in range(1, 5)]
+                self.assertGreater(speeds[0], 20)
+                self.assertGreater(speeds[2], 60)
+                self.assertLess(max(speeds), 90)
+
+    def test_invalid_samples_clear_position_velocity_and_covariance(self):
         tracker = app.BallTracker()
-        measured(tracker, 0, 33)
-        tracker.sample_ms = 1 << 40
-        tracker.samples = [(tracker.sample_ms, 0)]
-        self.assertAlmostEqual(measured(tracker, 2, 50)[1], 40)
+        for i in range(10):
+            measured(tracker, i * 2, 50)
         self.assertEqual(measured(tracker, 3, 501), app.LOST_MEASUREMENT)
-        self.assertEqual(measured(tracker, 3, 33)[1], 0)
+        fresh_tracker = app.BallTracker()
+        for x in (-90, -89, -87):
+            self.assertEqual(measured(tracker, x, 33), measured(fresh_tracker, x, 33))
         self.assertEqual(tracker.update(None, 33), app.LOST_MEASUREMENT)
         self.assertEqual(measured(tracker, 3, 33)[1], 0)
 

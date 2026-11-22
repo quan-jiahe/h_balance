@@ -52,9 +52,17 @@ class PipeCalibrationTests(unittest.TestCase):
         right = (scale.PIPE_TICK_X[11] * 640 / 448, 240, 90)
         with patch.object(scale, "CALIBRATION_CONFIRMED", True):
             self.assertEqual(tracker.update(zero, 40), (0, 0, 90, app.RAW_VALID))
-            x, speed, *_ = tracker.update(right, 100)
+            measured = tracker.update(right, 100)
+            x, speed, *_ = measured
             self.assertAlmostEqual(x, -10)
-            self.assertAlmostEqual(speed, -100)
+            self.assertAlmostEqual(speed, -100, delta=6)
+            packet = app.build_frame(8, 223, measured)
+            version, size, sequence, timestamp, position, velocity, confidence, status = struct.unpack(
+                "<BBHIhhBB", packet[2:-2])
+            self.assertEqual((version, size, sequence, timestamp, position, confidence, status),
+                             (1, 12, 8, 223, -10, 90, app.RAW_VALID))
+            self.assertEqual(velocity, round(speed))
+            self.assertEqual(int.from_bytes(packet[-2:], "little"), app.crc16(packet[2:-2]))
             self.assertEqual(tracker.update(None, 40), app.LOST_MEASUREMENT)
             self.assertEqual(tracker.update(right, 40)[1], 0)
             self.assertEqual(tracker.update(zero, 501), app.LOST_MEASUREMENT)
