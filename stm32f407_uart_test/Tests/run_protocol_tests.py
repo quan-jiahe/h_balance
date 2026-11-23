@@ -37,14 +37,16 @@ def main():
     args = argparse.ArgumentParser(description=__doc__)
     args.add_argument("--keil", required=True, type=Path, help="Path to UV4.exe")
     args.add_argument("--f103", action="store_true", help="Run the shared tests on Cortex-M3")
-    args.add_argument("--sine", action="store_true", help="Run the focused MODE5 tests")
+    focus = args.add_mutually_exclusive_group()
+    focus.add_argument("--sine", action="store_true", help="Run the focused MODE5 tests")
+    focus.add_argument("--trace", action="store_true", help="Run the focused control-telemetry tests")
     options = args.parse_args()
     root = Path(__file__).resolve().parents[1]
     repo = root.parent
     sys.path.insert(0, str(repo / "k230"))
     build = root / ("Tests/build/f103" if options.f103 else "Tests/build")
-    if options.sine:
-        build /= "sine"
+    if options.sine or options.trace:
+        build /= "sine" if options.sine else "control-trace"
     build.mkdir(parents=True, exist_ok=True)
     spec = importlib.util.spec_from_file_location("k230_protocol", repo / "k230/main.py")
     k230 = importlib.util.module_from_spec(spec)
@@ -90,8 +92,9 @@ def main():
     defines = tree.find(".//Cads/VariousControls/Define")
     if options.f103:
         defines.text = "STM32F103xB"
-    if options.sine:
-        defines.text = ",".join(filter(None, (defines.text, "TEST_SINE_ONLY")))
+    if options.sine or options.trace:
+        test_define = "TEST_SINE_ONLY" if options.sine else "TEST_TRACE_ONLY"
+        defines.text = ",".join(filter(None, (defines.text, test_define)))
         controls.text += " -Wno-unused-function"
     files = tree.find(".//Group[GroupName='Application']/Files")
     for element in list(files):
@@ -131,6 +134,11 @@ def main():
         cpu.mem_write(0xE000ED88, struct.pack("<I", 0x00F00000))
     cpu.emu_start(entry, 0, count=600000000)
     failures, checks, done, first_failure = struct.unpack("<IIII", cpu.mem_read(0x2001E000, 16))
+    if options.trace:
+        assert done == 0xF4072300, "Control trace C test did not finish"
+        assert failures == 0, f"Control trace failures: {failures:#x}, first failed check: {first_failure}"
+        print(f"PASS: {checks} control trace, VOFA tuning and motor hold checks")
+        return
     if options.sine:
         assert done == 0xF4072300, "MODE5 C test did not finish"
         for trial in range(5):
@@ -179,14 +187,14 @@ def main():
     assert decoder.menu_lines[1:] == ["MOTOR:STOP", "RANGE:0-650", "STEP:+0"]
     decoder.feed(bytes(cpu.mem_read(0x2001E380, 95)))
     assert decoder.menu_lines[1:3] == ["BAL: S2 ZERO", "X:+30 V:+0 mm/s"]
-    vofa_packet = bytes(cpu.mem_read(0x2001E480, 80))
+    vofa_packet = bytes(cpu.mem_read(0x2001E480, 216))
     assert vofa_packet[-4:] == bytes.fromhex("0000807f")
-    channels = struct.unpack("<19f", vofa_packet[:-4])
+    channels = struct.unpack("<53f", vofa_packet[:-4])
     assert channels[:2] == (12, -7) and channels[2:6] == (310, 310, 1, 1)
     assert channels[6] == 1
     expected_parameters = (0.6, 0.9, 0.1, 1.2, 1.8, 30, 50, 60, -0.2, -0.002, 100, 0.75)
-    assert all(abs(actual - expected) < 1e-5 for actual, expected in zip(channels[7:], expected_parameters))
-    print("PASS: VOFA JustFloat 19 channels, expanded RAM tuning range, value validation, timeout and nonblocking telemetry")
+    assert all(abs(actual - expected) < 1e-5 for actual, expected in zip(channels[7:19], expected_parameters))
+    print("PASS: VOFA JustFloat 53 channels, expanded RAM tuning range, value validation, timeout and nonblocking telemetry")
     print(f"PASS: {checks} C checks; real K230 packets -> C parser -> real K230 decoder")
     print("PASS: bad CRC, noise, truncated frames, key limits, tick wrap and link timeout")
     print("PASS: jog direction, one pulse per valid command, count and pulse-fault handling")

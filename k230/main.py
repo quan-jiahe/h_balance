@@ -146,7 +146,7 @@ def run(center_x_px=CENTER_BALANCE_X_PX):
     from media.sensor import Sensor, CAM_CHN_ID_0, CAM_CHN_ID_2
     from media.display import Display
     from media.media import MediaManager
-    from touch_ui import TouchMenu, PREVIEW_WIDTH, PREVIEW_HEIGHT
+    import touch_ui
     from steel_ball_detector import MODEL_PATH, SteelBallDetector
 
     sensor = None
@@ -173,7 +173,8 @@ def run(center_x_px=CENTER_BALANCE_X_PX):
         )
         sensor = Sensor()
         sensor.reset()
-        sensor.set_framesize(width=PREVIEW_WIDTH, height=PREVIEW_HEIGHT, chn=CAM_CHN_ID_0)
+        sensor.set_framesize(width=touch_ui.PREVIEW_WIDTH, height=touch_ui.PREVIEW_HEIGHT,
+                             chn=CAM_CHN_ID_0)
         sensor.set_pixformat(Sensor.RGB565, chn=CAM_CHN_ID_0)
         sensor.set_framesize(width=WIDTH, height=HEIGHT, chn=CAM_CHN_ID_2)
         sensor.set_pixformat(Sensor.RGBP888, chn=CAM_CHN_ID_2)
@@ -183,9 +184,12 @@ def run(center_x_px=CENTER_BALANCE_X_PX):
         media_ready = True
         sensor.run()
         detector = SteelBallDetector(WIDTH, HEIGHT)
-        ui = TouchMenu(lambda index: write_frame(
-            uart, build_key_frame(TOUCH_KEYS[index]),
-        ))
+        if hasattr(touch_ui, "TouchMenu"):
+            ui = touch_ui.TouchMenu(lambda index: write_frame(
+                uart, build_key_frame(TOUCH_KEYS[index]),
+            ))
+        else:
+            ui = touch_ui.StatusDisplay()
         previous_ms = time.ticks_ms()
         last_sync_ms = time.ticks_add(previous_ms, -1000)
         last_menu_ms = None

@@ -35,11 +35,16 @@ static const float sine_ki = 2.0f;           /* steps/(mm*s) */
 static const float sine_accel_ff = 1.67f;    /* steps/(mm/s²) */
 static const float sine_velocity_ff = 1.0f;  /* steps/(mm/s), approximates rolling drag */
 
+enum {
+    HOLD_EXIT_DISTANCE_MM = 4, HOLD_EXIT_SPEED_MM_S = 10,
+    HOLD_FILTER_DISTANCE_MM = 1, HOLD_IMMEDIATE_SPEED_MM_S = 20, HOLD_CORRECTION_STEPS = 4
+};
+
 _Static_assert(sizeof(BalanceTuning) == 56, "SWD tuning layout changed");
 
 static const float still_delay_s = 0.30f;
 static const float far_still_boost_delay_s = 0.20f;
-static const float far_still_boost_multiplier = 5.5f;
+static const float far_still_boost_multiplier = 10.5f;
 
 /* 在 VSCode 修改这些默认值，再编译并烧录即可永久生效。 */
 volatile BalanceTuning g_balance_tuning = {
@@ -50,23 +55,26 @@ volatile BalanceTuning g_balance_tuning = {
     .ki = 0.60f,          // 姿态学习速率；设0暂停学习，保留已有补偿
     .gain = 1.50f,        // 动态纠偏及学习速率倍率，不缩放已学补偿
     .brake = 2.00f,       // 提前制动时的速度增益倍率
-    .max_speed = 20.0f,   // 目标球速上限，mm/s
+    .max_speed = 80.0f,   // 目标球速上限，mm/s
     .accel = 10.0f,       // 制动距离规划加速度，mm/s²
     .ref_accel = 120.0f,  // 目标速度上升斜率，mm/s²
     .kff = 0.0f,          // 线性速度补偿
     .kff2 = 0.0f,         // 平方速度补偿
-    .max_offset = 150.0f, // 相对锁存姿态的最大纠偏步数
+    .max_offset = 300.0f, // 相对锁存姿态的最大纠偏步数
     .brake_speed_gain = 0.90f, // 接近速度为 30 mm/s 时使用一半额外制动增益
 };
 
 /* Integral is stored in output steps, so live gain changes preserve the learned pose. */
 typedef struct {
     float reference, integral, demand, stalled_seconds, still_seconds, stable_seconds;
+    float hold_command, hold_variance;
     uint32_t sample_ms;
     bool initialized, settled, braking;
+    int8_t brake_direction;
 } BallController;
 
 static BallController ball;
+static BalanceTrace trace;
 static uint32_t seen_observations, last_pulse_ms, started_ms;
 static int32_t target_steps, level_steps, anchor_steps;
 static bool startup_motion, armed, active;
@@ -166,10 +174,13 @@ static int32_t bounded_target(int32_t step)
 
 static void hold_here(const LinkTest *link)
 {
+    trace = (BalanceTrace){0};
     target_steps = link->steps;
     ball.reference = ball.stalled_seconds = ball.still_seconds = ball.stable_seconds = 0.0f;
+    ball.hold_command = ball.hold_variance = 0.0f;
     ball.demand = MOTOR_MM_SIGN * (link->steps - anchor_steps);
     ball.initialized = ball.settled = false;
+    ball.brake_direction = 0;
     active = false;
 }
 
@@ -268,9 +279,18 @@ static void mode3_observe(const LinkTest *link)
     }
 }
 
+__attribute__((noinline)) static float trace_value(double value)
+{
+    // Bound trace values before converting large live-tuning results to float32.
+    if (value > 1000000.0) { return 1000000.0f; }
+    if (value < -1000000.0) { return -1000000.0f; }
+    return (float)value;
+}
+
 /* The K230 already estimates mm/s; do not differentiate/filter it a second time. */
 static void update_target(const LinkTest *link, int16_t target_mm)
 {
+    trace = (BalanceTrace){.target_mm = target_mm, .flags = CONTROL_TRACE_EVALUATED};
     const float position = link->center_error_mm;
     const float velocity = link->center_velocity_mm_s;
     const float error = target_mm - position;
@@ -294,6 +314,12 @@ static void update_target(const LinkTest *link, int16_t target_mm)
         ball.braking = true;
         ball.demand = position > 0.0f ? low : high;
         mode3.edge_output = true;
+        trace.flags |= CONTROL_TRACE_EDGE_BRAKE | CONTROL_TRACE_BRAKING;
+        trace.approach_speed = outward;
+        trace.braking_distance = outward * (M3_RESPONSE_MS * 0.001f)
+            + outward * outward / (2.0f * g_balance_tuning.accel);
+        trace.braking_threshold = M3_BOUNDARY_MM - fabsf(position);
+        trace.demand_steps = trace.limited_steps = ball.demand;
         target_steps = bounded_target(anchor_steps + MOTOR_MM_SIGN * (int32_t)lroundf(ball.demand));
         return;
     }
@@ -302,10 +328,16 @@ static void update_target(const LinkTest *link, int16_t target_mm)
         ball.demand = MOTOR_MM_SIGN * (link->steps - anchor_steps);
         mode3.edge_output = false;
     }
-    const bool near_zero = ball.settled ? distance < 4.0f && speed < 10.0f
-                                       : distance <= 2.0f && speed <= 4.0f;
+    const bool mode1 = confirmed_mode == BALANCE_MODE_CENTER;
+    const bool within_hold_filter = mode1 ? distance < HOLD_EXIT_DISTANCE_MM
+                                          : distance <= HOLD_FILTER_DISTANCE_MM;
+    const bool filter_hold_exit = ball.settled && within_hold_filter
+        && speed >= HOLD_EXIT_SPEED_MM_S && speed < HOLD_IMMEDIATE_SPEED_MM_S;
+    const bool near_zero = ball.settled
+        ? distance < HOLD_EXIT_DISTANCE_MM && speed < HOLD_EXIT_SPEED_MM_S
+        : distance <= 2.0f && speed <= 4.0f;
     ball.stable_seconds = near_zero ? fminf(0.3f, ball.stable_seconds + dt) : 0.0f;
-    if (!near_zero) { ball.settled = false; }
+    if (!near_zero && !filter_hold_exit) { ball.settled = false; }
     if (!ball.settled && ball.stable_seconds >= 0.3f && link->steps == target_steps) {
         /* Transfer the complete held output into the origin without a target jump. */
         anchor_steps = target_steps;
@@ -314,7 +346,8 @@ static void update_target(const LinkTest *link, int16_t target_mm)
         ball.braking = false;
         ball.settled = true;
     }
-    if (ball.settled) {
+    if (ball.settled && !filter_hold_exit) {
+        ball.hold_command = ball.hold_variance = 0.0f;
         if (disturbance && mode3.phase == M3_CENTER) { mode3.phase = M3_READY; }
         return;
     }
@@ -329,10 +362,24 @@ static void update_target(const LinkTest *link, int16_t target_mm)
             fabsf(ball.reference) + g_balance_tuning.ref_accel * dt);
     }
     const float toward = velocity * direction;
-    const double extra_brake = toward > 0.0f
-        ? (double)g_balance_tuning.brake_speed_gain * (toward / (30.0f + toward)) : 0.0;
-    const float stopping_distance = toward * toward / (2.0f * acceleration);
-    ball.braking = toward > 0.0f && stopping_distance * (1.0 + extra_brake) >= distance * (ball.braking ? 0.55f : 0.85f);
+    /* Crossing zero with the same velocity direction still requires braking. */
+    const bool braking_past_zero = mode1 && ball.braking
+        && toward <= 0.0f && velocity * ball.brake_direction > 0.0f;
+    const float braking_speed = braking_past_zero ? speed : toward;
+    const double extra_brake = braking_speed > 0.0f
+        ? (double)g_balance_tuning.brake_speed_gain * (braking_speed / (30.0f + braking_speed)) : 0.0;
+    const float stopping_distance = braking_speed * braking_speed / (2.0f * acceleration);
+    const double braking_distance = stopping_distance * (1.0 + extra_brake);
+    const float braking_threshold = distance * (ball.braking ? 0.55f : 0.85f);
+    ball.braking = braking_speed > 0.0f && braking_distance >= braking_threshold;
+    trace.reference_speed = ball.reference;
+    trace.approach_speed = toward;
+    trace.braking_distance = braking_speed > 0.0f ? trace_value(braking_distance) : 0.0f;
+    trace.braking_threshold = braking_threshold;
+    if (ball.braking) {
+        ball.brake_direction = velocity > 0.0f ? 1 : -1;
+        trace.flags |= CONTROL_TRACE_BRAKING;
+    }
     ball.stalled_seconds = distance >= 10.0f && toward <= 4.0f && !ball.braking
         ? fminf(still_delay_s, ball.stalled_seconds + dt) : 0.0f;
     const bool still_off_target = distance >= 4.0f && speed <= 4.0f;
@@ -344,11 +391,12 @@ static void update_target(const LinkTest *link, int16_t target_mm)
     const float previous_integral = ball.integral;
     /* Keep the learned level while the judge is moving or holding the ball. */
     const bool allow_learning = !disturbance || (!mode3.edge && mode3.phase != M3_READY && mode3.phase != M3_HELD);
-    if (allow_learning && !ball.braking
+    if (!filter_hold_exit && allow_learning && !ball.braking
             && (far_still_boost || (distance < 10.0f && speed < 14.0f) || ball.stalled_seconds >= still_delay_s)) {
         /* Bound the ramp rate independently of how far the ball is from zero. */
         const float multiplier = far_still_boost ? far_still_boost_multiplier
             : (ball.still_seconds >= still_delay_s ? 3.0f : 1.0f);
+        trace.integral_multiplier = multiplier;
         const double learning_rate = (double)gain * g_balance_tuning.ki * multiplier;
         const double next = ball.integral + learning_rate * clamp(error, -10.0f, 10.0f) * dt;
         ball.integral = (float)fmin(fmax(next, -integral_limit), integral_limit);
@@ -357,8 +405,15 @@ static void update_target(const LinkTest *link, int16_t target_mm)
     const double kv = (double)g_balance_tuning.kv * (ball.braking ? g_balance_tuning.brake : 1.0f);
     /* Oppose actual approach velocity even while the reference still asks for acceleration. */
     const double damping = ball.braking ? (double)g_balance_tuning.kv * extra_brake * velocity : 0.0;
-    const double base = gain * ((double)g_balance_tuning.kp * error + kv * ((double)ball.reference - velocity) - damping)
-        + (double)g_balance_tuning.kff * velocity + (double)g_balance_tuning.kff2 * velocity * speed;
+    const double position_feedback = (double)g_balance_tuning.kp * error;
+    const double speed_feedback = kv * ((double)ball.reference - velocity);
+    const double linear_ff = (double)g_balance_tuning.kff * velocity;
+    const double square_ff = (double)g_balance_tuning.kff2 * velocity * speed;
+    const double base = gain * (position_feedback + speed_feedback - damping) + linear_ff + square_ff;
+    trace.position_steps = trace_value(gain * position_feedback);
+    trace.speed_steps = trace_value(gain * speed_feedback);
+    trace.brake_steps = trace_value(-gain * damping);
+    trace.feedforward_steps = trace_value(linear_ff + square_ff);
     double demand = base + ball.integral;
     const double integral_change = (double)ball.integral - previous_integral;
     const float applied = MOTOR_MM_SIGN * (link->steps - anchor_steps);
@@ -368,9 +423,36 @@ static void update_target(const LinkTest *link, int16_t target_mm)
             || (fabsf(ball.demand - applied) > INTEGRAL_TRACKING_LIMIT && (demand - applied) * integral_change > 0.0f)) {
         ball.integral = previous_integral;
         demand = base + ball.integral;
+        trace.flags |= CONTROL_TRACE_INTEGRAL_BLOCKED;
     }
-    const float limited = (float)fmin(fmax(demand, low), high);
-    ball.demand += clamp(limited - ball.demand, -MAX_COMMAND_CHANGE, MAX_COMMAND_CHANGE);
+    float limited = (float)fmin(fmax(demand, low), high);
+    trace.demand_steps = trace_value(demand);
+    if (demand < low || demand > high) { trace.flags |= CONTROL_TRACE_AT_LIMIT; }
+    if (filter_hold_exit) {
+        // A fixed-pose Kalman model rejects a single step command within the normal slew limit.
+        const float observed = clamp(limited, -MAX_COMMAND_CHANGE, MAX_COMMAND_CHANGE);
+        if (observed * ball.hold_command < 0.0f) {
+            ball.hold_command = ball.hold_variance = 0.0f;
+        }
+        const float predicted_variance = ball.hold_variance + 4.0f;
+        const float kalman_gain = predicted_variance / (predicted_variance + 25.0f);
+        ball.hold_command = clamp(ball.hold_command + kalman_gain * (observed - ball.hold_command), low, high);
+        ball.hold_variance = (1.0f - kalman_gain) * predicted_variance;
+        trace.flags |= CONTROL_TRACE_HOLD_FILTER;
+        trace.hold_filter_steps = ball.hold_command;
+        if (fabsf(ball.hold_command) < HOLD_CORRECTION_STEPS) {
+            trace.limited_steps = ball.demand;
+            ball.reference = 0.0f;
+            ball.braking = false;
+            return;
+        }
+        limited = ball.hold_command;
+        ball.settled = false;
+    }
+    trace.limited_steps = limited;
+    const float change = limited - ball.demand;
+    if (fabsf(change) > MAX_COMMAND_CHANGE) { trace.flags |= CONTROL_TRACE_SLEW_LIMIT; }
+    ball.demand += clamp(change, -MAX_COMMAND_CHANGE, MAX_COMMAND_CHANGE);
     target_steps = bounded_target(anchor_steps + MOTOR_MM_SIGN * (int32_t)lroundf(ball.demand));
 }
 
@@ -394,8 +476,11 @@ static void update_sine_target(const LinkTest *link, uint32_t now)
         ? clamp((link->center_sample_ms - ball.sample_ms) * 0.001f, 0.010f, 0.180f) : 0.033f;
     ball.initialized = true;
     ball.sample_ms = link->center_sample_ms;
-    const float base = sine_kp * error + sine_kv * (velocity_reference - link->center_velocity_mm_s)
-        + sine_accel_ff * acceleration_reference + sine_velocity_ff * velocity_reference;
+    const float position_feedback = sine_kp * error;
+    const float speed_feedback = sine_kv * (velocity_reference - link->center_velocity_mm_s);
+    const float accel_ff = sine_accel_ff * acceleration_reference;
+    const float velocity_ff = sine_velocity_ff * velocity_reference;
+    const float base = position_feedback + speed_feedback + accel_ff + velocity_ff;
     float low, high;
     sine_limits(&low, &high);
     const float previous = clamp(ball.integral, low, high);
@@ -407,8 +492,19 @@ static void update_sine_target(const LinkTest *link, uint32_t now)
         || (demand < low && error < 0.0f)
         || (fabsf(ball.demand - applied) > INTEGRAL_TRACKING_LIMIT && (demand - applied) * error > 0.0f);
     ball.integral = limited_in_error_direction ? previous : integral;
-    const float bounded = clamp(base + ball.integral, low, high);
-    ball.demand += clamp(bounded - ball.demand, -SINE_MAX_COMMAND_CHANGE, SINE_MAX_COMMAND_CHANGE);
+    const float command = base + ball.integral;
+    const float bounded = clamp(command, low, high);
+    const float change = bounded - ball.demand;
+    trace = (BalanceTrace){
+        .target_mm = reference, .reference_speed = velocity_reference, .reference_accel = acceleration_reference,
+        .position_steps = position_feedback, .speed_steps = speed_feedback,
+        .feedforward_steps = accel_ff + velocity_ff, .integral_multiplier = 1.0f,
+        .demand_steps = command, .limited_steps = bounded, .flags = CONTROL_TRACE_EVALUATED
+    };
+    if (limited_in_error_direction) { trace.flags |= CONTROL_TRACE_INTEGRAL_BLOCKED; }
+    if (command != bounded) { trace.flags |= CONTROL_TRACE_AT_LIMIT; }
+    if (fabsf(change) > SINE_MAX_COMMAND_CHANGE) { trace.flags |= CONTROL_TRACE_SLEW_LIMIT; }
+    ball.demand += clamp(change, -SINE_MAX_COMMAND_CHANGE, SINE_MAX_COMMAND_CHANGE);
     target_steps = bounded_target(anchor_steps + MOTOR_MM_SIGN * (int32_t)lroundf(ball.demand));
 }
 
@@ -466,6 +562,9 @@ static void sine_tick(LinkTest *link, uint32_t now)
         if (distance < SINE_EDGE_MM && (distance < SINE_PREDICT_FROM_MM || outward <= 0.0f
                                       || projected < SINE_TRAVEL_MM)) {
             update_sine_target(link, now);
+            trace.approach_speed = outward;
+            trace.braking_distance = projected - distance;
+            trace.braking_threshold = SINE_TRAVEL_MM - distance;
             return;
         }
         sine.phase = SINE_EDGE;
@@ -480,6 +579,12 @@ static void sine_tick(LinkTest *link, uint32_t now)
         ball.sample_ms = link->center_sample_ms;
         ball.settled = false;
         sine.edge_output = true;
+        trace = (BalanceTrace){
+            .approach_speed = outward, .braking_distance = outward * 0.15f + outward * outward / (2.0f * 25.0f),
+            .braking_threshold = SINE_TRAVEL_MM - distance,
+            .demand_steps = ball.demand, .limited_steps = ball.demand,
+            .flags = CONTROL_TRACE_EVALUATED | CONTROL_TRACE_EDGE_BRAKE | CONTROL_TRACE_BRAKING
+        };
         target_steps = bounded_target(anchor_steps + MOTOR_MM_SIGN * (int32_t)lroundf(ball.demand));
     } else {
         if (sine.edge_output) {
@@ -493,6 +598,18 @@ static void sine_tick(LinkTest *link, uint32_t now)
 
 int32_t center_balance_level_steps(void) { return level_steps; }
 int32_t center_balance_target_steps(void) { return target_steps; }
+
+const BalanceTrace *center_balance_trace(void)
+{
+    trace.mode = confirmed_mode;
+    trace.phase = confirmed_mode == BALANCE_MODE_SINE ? (unsigned)sine.phase
+        : confirmed_mode == BALANCE_MODE_DISTURBANCE ? (unsigned)mode3.phase
+        : confirmed_mode == BALANCE_MODE_THREE_POINTS ? (unsigned)sequence.phase : 0u;
+    trace.still_ms = ball.still_seconds * 1000.0f;
+    trace.integral_steps = ball.integral;
+    trace.anchor_steps = anchor_steps;
+    return &trace;
+}
 
 uint8_t center_balance_state(const LinkTest *link, uint32_t now)
 {
@@ -526,6 +643,7 @@ const char *center_balance_mode3_status(const LinkTest *link, uint32_t now)
 
 void center_balance_init(void)
 {
+    trace = (BalanceTrace){0};
     ball = (BallController){0};
     anchor_steps = 0;
     active = false;
@@ -581,6 +699,10 @@ void center_balance_key(const LinkTest *link, uint8_t key, uint32_t now)
 
 void center_balance_button(const LinkTest *link, BoardButton button)
 {
+    if (button == BOARD_SW5 && confirmed_mode == BALANCE_MODE_SINE) {
+        center_balance_key(link, LINK_KEY_BACK, 0);
+        return;
+    }
     if (sine.phase == SINE_RUNNING || (button != BOARD_SW3 && three_points_running())) { return; }
     if (button == BOARD_SW1) {
         selected_mode = selected_mode == BALANCE_MODE_SINE ? BALANCE_MODE_CENTER : selected_mode + 1;

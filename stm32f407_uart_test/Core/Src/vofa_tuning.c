@@ -2,6 +2,7 @@
 #include "vofa_uart.h"
 #include "balance_tuning.h"
 #include "center_balance.h"
+#include "center_oled.h"
 #include <ctype.h>
 #include <float.h>
 #include <math.h>
@@ -16,12 +17,14 @@ static const Parameter parameters[] = {
     PARAM(accel), PARAM(ref_accel), PARAM(kff), PARAM(kff2), PARAM(max_offset), PARAM(brake_speed_gain)
 };
 enum { PARAM_COUNT = sizeof(parameters) / sizeof(parameters[0]),
-       CHANNELS = 7 + PARAM_COUNT, PERIOD_MS = 50, LINE_SIZE = 64 };
+       TRACE_START = 7 + PARAM_COUNT, PERIOD_MS = 50, MIN_TRACE_PERIOD_MS = 25, LINE_SIZE = 64 };
+_Static_assert(VOFA_PACKET_SIZE <= 255, "VOFA frame must fit in the transmit ring");
 static char line[LINE_SIZE];
 static unsigned used;
 static bool discard_line;
 static int command_status;
 static uint32_t last_byte_ms, last_frame_ms, seen_errors;
+static uint32_t last_observations, dropped_frames;
 
 static volatile float *value_at(const Parameter *p)
 {
@@ -65,11 +68,11 @@ void vofa_tuning_init(void)
     used = 0;
     discard_line = false;
     command_status = 0;
-    last_byte_ms = last_frame_ms = seen_errors = 0;
+    last_byte_ms = last_frame_ms = seen_errors = last_observations = dropped_frames = 0;
     vofa_uart_init();
 }
 
-void vofa_tuning_tick(const LinkTest *link, uint32_t now)
+__attribute__((minsize)) void vofa_tuning_tick(const LinkTest *link, uint32_t now)
 {
     const uint32_t errors = vofa_uart_errors();
     if (errors != seen_errors) {
@@ -104,17 +107,43 @@ void vofa_tuning_tick(const LinkTest *link, uint32_t now)
             }
         }
     }
-    if (now - last_frame_ms < PERIOD_MS) { return; }
-    _Static_assert(sizeof(float) == 4, "JustFloat requires 32-bit floats");
-    float channels[CHANNELS] = {
+    const uint32_t elapsed = now - last_frame_ms;
+    const bool new_observation = link->center_observations != last_observations;
+    if (elapsed < PERIOD_MS && (!new_observation || elapsed < MIN_TRACE_PERIOD_MS)) { return; }
+    last_frame_ms = now;
+    last_observations = link->center_observations;
+
+    const BalanceTrace *trace = center_balance_trace();
+    float angle = 0.0f;
+    const bool angle_valid = center_oled_relative_angle(now, &angle);
+    float packet[] = {
         link->center_error_mm, link->center_velocity_mm_s, link->steps,
         center_balance_target_steps(), center_balance_state(link, now),
-        link->center_valid && now - link->center_rx_ms < 180u, command_status
+        link->center_valid && now - link->center_rx_ms < 180u, command_status,
+        [TRACE_START] = now & 0xFFFFFFu,
+        trace->mode, trace->target_mm, trace->target_mm - link->center_error_mm,
+        trace->reference_speed, trace->reference_accel, trace->approach_speed,
+        trace->braking_distance, trace->braking_threshold, trace->still_ms, trace->integral_multiplier,
+        trace->position_steps, trace->speed_steps, trace->brake_steps, trace->integral_steps, trace->feedforward_steps,
+        trace->demand_steps, trace->limited_steps, trace->hold_filter_steps, trace->anchor_steps, trace->flags,
+        link->center_observations & 0xFFFFFFu, link->center_sample_ms & 0xFFFFFFu,
+        link->center_observations ? (float)(now - link->center_rx_ms) : -1.0f,
+        angle, angle_valid, link->step_pulses & 0xFFFFFFu, link->step_reversals & 0xFFFFFFu,
+        link->last_step_direction, dropped_frames & 0xFFFFFFu, trace->phase,
+        link->center_confidence, link->last_status, link->crc_errors & 0xFFFFFFu,
+        0.0f
     };
-    for (unsigned i = 0; i < PARAM_COUNT; ++i) { channels[7 + i] = *value_at(&parameters[i]); }
-    uint8_t packet[sizeof(channels) + 4];
+    _Static_assert(sizeof(packet) == VOFA_PACKET_SIZE, "JustFloat channel layout");
+    for (unsigned i = 0; i < PARAM_COUNT; ++i) { packet[7 + i] = *value_at(&parameters[i]); }
+    for (unsigned i = TRACE_START; i < VOFA_CHANNELS; ++i) {
+        // Infinity is the JustFloat delimiter, so sanitize using its wire representation.
+        uint32_t bits;
+        memcpy(&bits, &packet[i], sizeof(bits));
+        if ((bits & 0x7F800000u) == 0x7F800000u) {
+            packet[i] = (bits >> 31) ? -1000000.0f : 1000000.0f;
+        }
+    }
     static const uint8_t tail[] = {0, 0, 0x80, 0x7F};
-    memcpy(packet, channels, sizeof(channels));
-    memcpy(packet + sizeof(channels), tail, sizeof(tail));
-    if (vofa_uart_write(packet, sizeof(packet))) { last_frame_ms = now; }
+    memcpy(packet + VOFA_CHANNELS, tail, sizeof(tail));
+    if (!vofa_uart_write((const uint8_t *)packet, sizeof(packet))) { ++dropped_frames; }
 }

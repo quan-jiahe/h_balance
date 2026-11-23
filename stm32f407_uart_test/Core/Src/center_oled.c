@@ -190,13 +190,18 @@ static const uint8_t glyphs[][5] = {
 };
 static const char glyph_keys[] = "0123456789ABCDEFGILMNORSTWZ+-.HPUYKV";
 
-static void draw_line(uint8_t *line, const char *text)
+static void draw_text(uint8_t *line, unsigned x, const char *text)
 {
-    memset(line, 0, WIDTH);
-    for (unsigned x = 4; *text && x + 5u <= WIDTH; x += 6u, ++text) {
+    for (; *text && x + 5u <= WIDTH; x += 6u, ++text) {
         const char *glyph = strchr(glyph_keys, *text);
         if (glyph) { memcpy(line + x, glyphs[glyph - glyph_keys], 5); }
     }
+}
+
+static void draw_line(uint8_t *line, const char *text)
+{
+    memset(line, 0, WIDTH);
+    draw_text(line, 4, text);
 }
 
 static void make_frame(const LinkTest *link, uint32_t now)
@@ -212,7 +217,12 @@ static void make_frame(const LinkTest *link, uint32_t now)
         : mode == BALANCE_MODE_SINE ? center_balance_sine_status(link, now)
         : mode != BALANCE_MODE_CENTER ? "RESERVED"
         : state == 4 ? "STOP" : state == 3 ? "HOLD" : state == 2 ? "RUN" : "WAIT BALL";
-    snprintf(line, sizeof(line), "MODE%u %s", (unsigned)mode, status);
+    const bool sine_readout = mode == BALANCE_MODE_SINE && confirmed && state != 0 && state != 5;
+    if (sine_readout && !strcmp(status, "RUN")) {
+        snprintf(line, sizeof(line), "MODE5 RUN R%+d MM", (int)lroundf(center_balance_sine_reference_mm(now)));
+    } else {
+        snprintf(line, sizeof(line), "MODE%u %s", (unsigned)mode, status);
+    }
     draw_line(frame[0], line);
     memset(frame[1], 0, WIDTH);
     memset(frame[2], 0, WIDTH);
@@ -221,13 +231,20 @@ static void make_frame(const LinkTest *link, uint32_t now)
         for (unsigned row = 0; row < 2; ++row) {
             memcpy(frame[1 + row] + (WIDTH - MODE_LABEL_WIDTH) / 2, mode_labels[label][row], MODE_LABEL_WIDTH);
         }
-    } else if (mode == BALANCE_MODE_SINE && confirmed && state != 0 && state != 5) {
-        snprintf(line, sizeof(line), "REF %+d MM", (int)lroundf(center_balance_sine_reference_mm(now)));
-        draw_line(frame[1], line);
+    } else if (mode == BALANCE_MODE_RESERVED || mode == BALANCE_MODE_SINE) {
+        const unsigned label = mode - BALANCE_MODE_RESERVED;
+        const unsigned start = sine_readout ? 0 : (WIDTH - SHORT_MODE_LABEL_WIDTH) / 2;
+        for (unsigned row = 0; row < 2; ++row) {
+            memcpy(frame[1 + row] + start, short_mode_labels[label][row], SHORT_MODE_LABEL_WIDTH);
+        }
+    }
+    if (sine_readout) {
         const unsigned peak = (unsigned)lroundf(10.0f * center_balance_sine_peak_error_mm());
         const unsigned rms = (unsigned)lroundf(10.0f * center_balance_sine_rms_error_mm());
-        snprintf(line, sizeof(line), "PK %u.%u RMS %u.%u MM", peak / 10u, peak % 10u, rms / 10u, rms % 10u);
-        draw_line(frame[2], line);
+        snprintf(line, sizeof(line), "PK %u.%u", peak / 10u, peak % 10u);
+        draw_text(frame[1], SHORT_MODE_LABEL_WIDTH + 4, line);
+        snprintf(line, sizeof(line), "RMS%u.%u", rms / 10u, rms % 10u);
+        draw_text(frame[2], SHORT_MODE_LABEL_WIDTH + 4, line);
     }
     if (!imu_ready || now - last_good > 200u) {
         draw_line(frame[ANGLE_PAGE], "ANGLE IMU ERR");
@@ -287,3 +304,17 @@ void center_oled_tick(const LinkTest *link, uint32_t now)
     clearing = false;
 }
 #endif
+
+bool center_oled_relative_angle(uint32_t now, float *degrees)
+{
+#ifdef F407_CENTER_BALANCE
+    if (imu_ready && zeroed && now - last_good <= 200u) {
+        *degrees = angle;
+        return true;
+    }
+#else
+    (void)now;
+    (void)degrees;
+#endif
+    return false;
+}

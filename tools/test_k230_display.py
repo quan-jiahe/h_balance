@@ -2,8 +2,10 @@
 
 from array import array
 import importlib.util
+import os
 from pathlib import Path
 import sys
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
@@ -100,6 +102,32 @@ class DisplayTests(unittest.TestCase):
             self.sent = []
             self.ui = module.TouchMenu(self.sent.append)
         self.module = module
+
+    def test_startup_accepts_status_only_ui(self):
+        path = Path(self.module.__file__).with_name("main.py")
+        spec = importlib.util.spec_from_file_location("k230_startup_test", path)
+        app = importlib.util.module_from_spec(spec)
+        uart = Mock()
+        uart.return_value.write.side_effect = len
+        status = Mock()
+        modules = {
+            "machine": SimpleNamespace(FPIOA=Mock(), UART=uart),
+            "media": SimpleNamespace(__path__=[]),
+            "media.sensor": SimpleNamespace(Sensor=Mock(), CAM_CHN_ID_0=0, CAM_CHN_ID_2=2),
+            "media.display": SimpleNamespace(Display=Mock()),
+            "media.media": SimpleNamespace(MediaManager=Mock()),
+            "touch_ui": SimpleNamespace(StatusDisplay=status, PREVIEW_WIDTH=448, PREVIEW_HEIGHT=336),
+            "steel_ball_detector": SimpleNamespace(MODEL_PATH="model.kmodel", SteelBallDetector=Mock()),
+        }
+        with patch.dict(sys.modules, modules), patch.object(
+                sys, "path", [str(path.parent)] + sys.path), patch.object(
+                os, "exitpoint", create=True), patch.object(
+                os, "EXITPOINT_ENABLE", 1, create=True), patch.object(
+                time, "ticks_ms", side_effect=KeyboardInterrupt, create=True):
+            spec.loader.exec_module(app)
+            app.run()
+        status.assert_called_once_with()
+        status.return_value.close.assert_called_once_with()
 
     def test_draw_format_buffers_and_actual_flushed_pointer(self):
         self.driver.set_color_format.assert_called_once_with(17)

@@ -21,7 +21,7 @@ static int imu_noise;
 static int position, motor_sign = 1;
 static float motion_scale = 1.0f, imu_sign = 1.0f;
 
-static uint8_t tuning_rx[256], tuning_tx[80];
+static uint8_t tuning_rx[256], tuning_tx[VOFA_PACKET_SIZE];
 static unsigned tuning_head, tuning_tail, tuning_tx_size, tuning_frames;
 static uint32_t tuning_errors;
 static bool tuning_tx_full;
@@ -649,6 +649,43 @@ static void test_center_motor_rate(void)
     check(link.steps == center_balance_target_steps(), 24);
 }
 
+static void test_center_motor_hold_filter(void)
+{
+    LinkTest link;
+    finish_center_startup(&link);
+    for (unsigned i = 0; i < 12; ++i) { observe_ball(&link, 0, 0); }
+    const int32_t held = center_balance_target_steps();
+    const unsigned pulses = pulse_count;
+    for (int side = -1; side <= 1; side += 2) {
+        observe_ball(&link, 2 * side, 12 * side);
+        check(center_balance_state(&link, now_ms) == 3 && pulse_count == pulses, 30);
+        observe_ball(&link, 2 * side, 0);
+        observe_ball(&link, 3 * side, 11 * side);
+        check(center_balance_state(&link, now_ms) == 3 && pulse_count == pulses, 30);
+        observe_ball(&link, 3 * side, 0);
+    }
+    observe_ball(&link, 1, 12);
+    observe_ball(&link, 1, 2);
+    for (unsigned i = 0; i < 8; ++i) {
+        const int16_t sign = (i & 1u) ? 1 : -1;
+        observe_ball(&link, sign, 19 * sign);
+    }
+    observe_ball(&link, 1, 0);
+    observe_ball(&link, 1, 12);
+    check(center_balance_state(&link, now_ms) == 3 && pulse_count == pulses, 24);
+    observe_ball(&link, 1, 12);
+    check(center_balance_state(&link, now_ms) == 2
+          && center_balance_target_steps() == held - 4 && pulse_count == pulses + 4, 24);
+
+    for (unsigned test = 0; test < 2; ++test) {
+        for (unsigned i = 0; i < 12; ++i) { observe_ball(&link, 0, 0); }
+        const int32_t restored = center_balance_target_steps();
+        check(center_balance_state(&link, now_ms) == 3, 24);
+        observe_ball(&link, test ? -4 : 0, test ? 0 : 20);
+        check(center_balance_state(&link, now_ms) == 2 && center_balance_target_steps() != restored, 24);
+    }
+}
+
 static void test_center_stall_integral(void)
 {
     const BalanceTuning defaults = g_balance_tuning;
@@ -665,10 +702,10 @@ static void test_center_stall_integral(void)
         for (unsigned i = 0; i < 5; ++i) { observe_ball(&link, x, 0); }
         check(center_balance_target_steps() == 310, 24);
         for (unsigned i = 0; i < 4; ++i) { observe_ball(&link, x, 0); }
-        check(center_balance_target_steps() == 310 + (side ? 5 : -5), 24);
-        for (unsigned i = 0; i < 29; ++i) { observe_ball(&link, x, 0); }
+        check(center_balance_target_steps() == 310 + (side ? 10 : -10), 24);
+        for (unsigned i = 0; i < 19; ++i) { observe_ball(&link, x, 0); }
         const int ramped = center_balance_target_steps();
-        check(ramped == 310 + (side ? 58 : -58), 24);
+        check(ramped == 310 + (side ? 76 : -76), 24);
         for (unsigned i = 0; i < 30; ++i) { observe_ball(&link, x, side ? 10 : -10); }
         check(center_balance_target_steps() == ramped, 24);
         observe_ball(&link, 0, side ? 40 : -40);
@@ -838,6 +875,27 @@ static void test_center_feedback_pause(void)
     observe_ball(&link, 30, 0);
     check(center_balance_target_steps() == compensated, 25);
     g_balance_tuning = defaults;
+}
+
+static void test_center_brake_through_target(void)
+{
+    LinkTest link;
+    const BalanceTrace *trace = center_balance_trace();
+    for (int side = -1; side <= 1; side += 2) {
+        finish_center_startup(&link);
+        for (unsigned i = 0; i < 85; ++i) { observe_ball(&link, 9 * side, 0); }
+        observe_ball(&link, side, -44 * side);
+        check((trace->flags & CONTROL_TRACE_BRAKING) && side * trace->demand_steps > 0, 30);
+        observe_ball(&link, 0, -43 * side);
+        check((trace->flags & CONTROL_TRACE_BRAKING) && side * trace->demand_steps > 0, 30);
+        observe_ball(&link, -side, -42 * side);
+        check((trace->flags & CONTROL_TRACE_BRAKING) && side * trace->demand_steps > 0, 30);
+        observe_ball(&link, -3 * side, -4 * side);
+        check(!(trace->flags & CONTROL_TRACE_BRAKING), 30);
+        observe_ball(&link, side, -44 * side);
+        observe_ball(&link, 2 * side, 42 * side);
+        check(!(trace->flags & CONTROL_TRACE_BRAKING), 30);
+    }
 }
 
 static void test_center_braking(void)
@@ -1170,6 +1228,12 @@ static void test_sine_state(void)
     center_balance_key(&link, LINK_KEY_BACK, now_ms);
     check(sine_status(&link, "STOP") && center_balance_target_steps() == link.steps,
           SINE_STATE_CHECK);
+    center_balance_start_sine(&link, now_ms, now_ms);
+    center_balance_button(&link, BOARD_SW5);
+    const unsigned stopped_pulses = pulse_count;
+    observe_ball(&link, 5, 0);
+    check(sine_status(&link, "STOP") && center_balance_target_steps() == link.steps
+          && pulse_count == stopped_pulses, SINE_STATE_CHECK);
 
     arm_sine(&link);
     observe_ball(&link, 0, 0);
@@ -1289,6 +1353,41 @@ static void test_sine_plant(void)
 }
 #endif
 
+static void test_control_trace(void)
+{
+    LinkTest link;
+    finish_center_startup(&link);
+    vofa_tuning_init();
+    for (unsigned i = 0; i < 8; ++i) { observe_ball(&link, 35, 0); }
+    vofa_tuning_tick(&link, now_ms);
+    check(tuning_tx_size == VOFA_PACKET_SIZE && tuning_channel(20) == 1
+          && tuning_channel(21) == 0 && tuning_channel(22) == -35, 24);
+    check(tuning_channel(28) >= 200 && tuning_channel(29) == 10.5f
+          && tuning_channel(30) == -26.25f && tuning_channel(33) < 0, 24);
+    const unsigned previous_frames = tuning_frames;
+    observe_ball(&link, 35, -50);
+    vofa_tuning_tick(&link, now_ms);
+    check(tuning_frames == previous_frames + 1 && tuning_channel(25) == 50
+          && tuning_channel(26) > tuning_channel(27) && tuning_channel(32) > 0
+          && ((unsigned)tuning_channel(39) & CONTROL_TRACE_BRAKING), 24);
+
+    link.last_step_direction = 0;
+    const uint32_t pulses = link.step_pulses;
+    const uint32_t reversals = link.step_reversals;
+    link_test_jog(&link, true);
+    link_test_jog(&link, false);
+    vofa_tuning_tick(&link, now_ms + 50);
+    check(tuning_channel(45) == pulses + 2 && tuning_channel(46) == reversals + 1
+          && tuning_channel(47) == -1, 24);
+
+    const float gain = g_balance_tuning.gain;
+    g_balance_tuning.gain = 1e38f;
+    observe_ball(&link, 35, 0);
+    vofa_tuning_tick(&link, now_ms + 50);
+    check(tuning_channel(30) == -1000000.0f, 24);
+    g_balance_tuning.gain = gain;
+}
+
 static void test_vofa_tuning(void)
 {
     LinkTest link;
@@ -1345,7 +1444,8 @@ static void test_vofa_tuning(void)
     link.center_rx_ms = now_ms;
     vofa_tuning_tick(&link, now_ms);
     static const uint8_t tail[] = {0, 0, 0x80, 0x7F};
-    check(tuning_tx_size == 80 && memcmp(tuning_tx + 76, tail, 4) == 0, 24);
+    check(tuning_tx_size == VOFA_PACKET_SIZE
+          && memcmp(tuning_tx + VOFA_PACKET_SIZE - 4, tail, 4) == 0, 24);
     check(tuning_channel(0) == 12 && tuning_channel(1) == -7 && tuning_channel(2) == link.steps, 24);
     check(tuning_channel(3) == center_balance_target_steps() && tuning_channel(4) == 1 && tuning_channel(5) == 1, 24);
     memcpy((void *)0x2001E480u, tuning_tx, tuning_tx_size);
@@ -1357,7 +1457,7 @@ static void test_vofa_tuning(void)
     check(tuning_frames == sent, 24);
     tuning_tx_full = false;
     vofa_tuning_tick(&link, now_ms + 201);
-    check(tuning_frames == sent + 1 && tuning_channel(5) == 0, 24);
+    check(tuning_frames == sent + 1 && tuning_channel(5) == 0 && tuning_channel(48) == 1, 24);
     const char *expanded[] = {
         "kp=5.5\n", "kv=8\n", "ki=-1\n", "gain=1e38\n", "brake=0.5\n",
         "max_speed=200\n", "accel=400\n", "ref_accel=600\n", "kff=-4\n",
@@ -1383,7 +1483,12 @@ static void test_vofa_tuning(void)
 int main(void)
 {
     result[0] = result[1] = result[2] = result[3] = 0;
-#ifdef TEST_SINE_ONLY
+#if defined(TEST_TRACE_ONLY)
+    test_center_brake_through_target();
+    test_control_trace();
+    test_vofa_tuning();
+    test_center_motor_hold_filter();
+#elif defined(TEST_SINE_ONLY)
     test_sine_state();
     test_sine_plant();
 #else
@@ -1469,14 +1574,17 @@ int main(void)
     test_mode3();
     test_center_balance();
     test_center_motor_rate();
+    test_center_motor_hold_filter();
     test_center_stall_integral();
     test_center_bias_continuity();
     test_center_saturation_recovery();
     test_center_feedback_pause();
     test_center_braking();
+    test_center_brake_through_target();
     test_adaptive_plant();
     test_three_point_plant();
     test_mode3_plant();
+    test_control_trace();
     test_vofa_tuning();
 #endif
     result[2] = 0xF4072300u;

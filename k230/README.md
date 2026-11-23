@@ -10,6 +10,16 @@ K230 用一维位置–速度卡尔曼滤波估算球速，按实际采样间隔
 
 正在使用毫米协议 v1 的 K230 只需备份并替换 `/sdcard/main.py`，再重启。脚本沿用板上的模型、原生库、触控文件和毫米标定表。F407 控制说明见 [CONTROL.md](../stm32f407_uart_test/CONTROL.md)。
 
+开机时，`main.py` 按板上 `touch_ui.py` 提供的类选择界面。带触控的版本使用 `TouchMenu`，仅有状态显示的版本使用 `StatusDisplay`。状态显示版曾因更新 `main.py` 后导入 `TouchMenu` 失败而黑屏。兼容修复已在该板试跑 30 帧，LCD 驱动成功刷新 30 次。
+
+Mode 1 台架联调时，在板上可用的 `main.py` 中替换估速代码，保留原启动流程和设备配置。已核对写入文件 SHA256。重启后从 F407 的 VOFA 通道 I40/I41 确认 K230 连续上报。板上回退文件为 `/sdcard/main_pre_kalman_live.py`。F407 保持原固件，串口对照使用 RAM 参数 `kv=0.70`、`ki=0.60`、`brake=1.70`、`accel=10`、`max_speed=80`、`max_offset=300`。
+
+用旧记录中位置在 +1～+2 mm 的片段做离线重放，旧估速与卡尔曼估速的 RMS 为 12.27 和 5.49 mm/s。两者相邻帧双边速度绝对值均大于 4 mm/s 的变号次数均为 18。
+
+Mode 1 实机带球复测时 F407 实际参数为 `brake=2.00`，其余上述参数相同。两轮负侧扰动均到 −37 mm，分别在纠偏开始后 3.24 s 和 5.79 s 进入保持，换向 14 次和 38 次。第一轮在 −35 mm 位置触发静摩擦增益后约 0.29 s 起滚。第二轮过冲至 +16 mm，其中 32 次换向发生在第一次过中点之后，最终在 +2 mm 保持超过 60 s。两轮出发条件有差异。记录见本机 `device_backups/vofa_mode1_kalman_drop_20261122_230442.csv`。
+
+正侧试验在 +53 至 −36 mm 之间往返。连续采样的 21.4 s 内换向 100 次。后续已在 0 mm 进入保持，停稳时刻落在两段采集之间。下一轮从 +19 mm 重新取得有效观测，5.32 s 后在 0 mm 进入保持，换向 40 次。旧 F407 在高速过零时会突然撤掉加强制动，详见 [F407 闭环说明](../stm32f407_uart_test/CONTROL.md)。
+
 ## 当前毫米稳球配套
 
 本目录已经带入实机确认的 21 点刻度表 `pipe_calibration.py`，左正右负、每格10 mm。`main.py` 默认毫米协议 v1、`CENTER_BALANCE_X_PX=None`，使用当前 steel236 模型。上传时同时更新 `main.py`、`touch_ui.py`、`pipe_calibration.py`、`steel_ball_detector.py`，保留板上已验证模型和原生库。新模型来源及校验记录见 `model_steel236.json`。像素 v2模式不适用于当前毫米控制器。

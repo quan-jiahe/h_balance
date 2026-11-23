@@ -48,15 +48,14 @@ int main(void)
         const uint32_t now_ms = board_millis();
         board_buttons_poll(now_ms);
 #ifdef F407_CENTER_BALANCE
-        for (BoardButton button = BOARD_SW1; button <= BOARD_SW3; ++button) {
-            if (board_button_take_press(button)) {
+        for (BoardButton button = BOARD_SW1; button <= BOARD_SW5; ++button) {
+            uint32_t pressed_ms;
+            if (!board_button_take_press_at(button, &pressed_ms)) { continue; }
+            if (button == BOARD_SW4) {
+                center_balance_start_sine(&link, pressed_ms, now_ms);
+            } else {
                 center_balance_button(&link, button);
-                link.menu_due = 1;
             }
-        }
-        uint32_t pressed_ms;
-        if (board_button_take_press_at(BOARD_SW4, &pressed_ms)) {
-            center_balance_start_sine(&link, pressed_ms, now_ms);
             link.menu_due = 1;
         }
         center_balance_tick(&link, now_ms);

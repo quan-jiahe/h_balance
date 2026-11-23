@@ -74,6 +74,7 @@ uint8_t link_test_feed(LinkTest *link, uint8_t byte, uint32_t now_ms)
                 link->center_sample_ms = sample_ms;
                 link->center_rx_ms = now_ms;
                 link->center_valid = valid;
+                link->center_confidence = data[14];
                 ++link->center_observations;
             } else if (!valid) {
                 link->center_valid = false;
@@ -130,7 +131,11 @@ void link_test_jog(LinkTest *link, bool forward)
     if (link->step_fault) { return; }
     if (forward ? link->steps == INT32_MAX : link->steps == INT32_MIN) { return; }
     if (board_step_pulse(forward)) {
-        link->steps += forward ? 1 : -1;
+        const int8_t direction = forward ? 1 : -1;
+        link->step_reversals += link->last_step_direction != 0 && link->last_step_direction != direction;
+        link->last_step_direction = direction;
+        ++link->step_pulses;
+        link->steps += direction;
     } else {
         link->step_fault = 1;
     }

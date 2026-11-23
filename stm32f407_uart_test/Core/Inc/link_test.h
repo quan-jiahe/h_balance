@@ -32,9 +32,13 @@ typedef struct {
     uint32_t center_observations;
     uint32_t center_rx_ms;
     uint32_t center_sample_ms;
+    uint32_t step_pulses;
+    uint32_t step_reversals;
     int16_t center_error_mm;
     int16_t center_velocity_mm_s;
     bool center_valid;
+    uint8_t center_confidence;
+    int8_t last_step_direction;
     uint32_t crc_errors;
     int32_t value;
     int32_t steps;
